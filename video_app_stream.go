@@ -125,18 +125,30 @@ func (self *AppStream) openControl() (mangos.Socket,bool,chan bool) {
     go func() {
         for {
             self.controlMutex.Lock()
-            err := self.controlSocket.Send([]byte(`{"action": "ping"}`))
-            //var msg []byte
-            if err == nil {
-                _, err = self.controlSocket.Recv()
+            if self.controlSocket == nil {
                 self.controlMutex.Unlock()
+                time.Sleep( time.Second * 1 )
+                continue
             }
+            err := self.controlSocket.Send([]byte(`{"action": "ping"}`))
             if err != nil {
                 fmt.Printf("video ping -> fail\n" )
+                self.controlMutex.Unlock()
                 controlStopChan <- true
                 break
             }
+            
+            _, err = self.controlSocket.Recv()
+            self.controlMutex.Unlock()
+            
+            if err != nil {
+                fmt.Printf("video ping recv -> fail\n" )
+                controlStopChan <- true
+                break
+            }
+            
             //fmt.Printf("video ping -> %s\n", msg )
+            
             time.Sleep( time.Second * 2 )
         }
     }()
@@ -270,6 +282,16 @@ func (self *AppStream) mainLoop() {
                 // If not restart it
                 if !alive {
                     fmt.Printf("Video broadcast died. Restarting\n")
+                    config := self.device.config
+                    res := self.device.bridge.LaunchApp( config.vidAppBidPrefix + "." + config.vidAppBid ) // com.dryark.vidstream
+                    if res == false {
+                        appPath := "bin/vidstream/vidstream.app"
+                        if _, err := os.Stat(appPath); err == nil {
+                            self.device.bridge.InstallApp( appPath )
+                        } else if os.IsNotExist(err) {
+                            // TODO: panic.
+                        }
+                    }
                     self.device.justStartBroadcast()
                     self.controlSocket = nil
                     imgSocket = nil
