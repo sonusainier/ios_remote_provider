@@ -37,6 +37,7 @@ func NewDeviceTracker( config *Config, detect bool, idList []string ) (*DeviceTr
     if detect {
         cf, cfStop = NewControlFloor( config )
     }
+    fmt.Println("WWWWWW NewDeviceTracker()")
     
     portRange := config.portRange
     parts := strings.Split(portRange,"-")
@@ -130,6 +131,8 @@ func (self *DeviceTracker) cfReady() {
 func (self *DeviceTracker) onDeviceConnect1( bdev BridgeDev ) *Device {
     udid := bdev.getUdid()
     
+    fmt.Println("WWWW On device connect1")
+
     startedDevice, isStarted := self.DevMap[ udid ]
     if isStarted {
         width := startedDevice.vidWidth

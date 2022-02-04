@@ -2,6 +2,7 @@ package main
 
 import (
     "fmt"
+    "encoding/json"
     "strings"
     "strconv"
     "sync"
@@ -61,6 +62,8 @@ type Device struct {
     process         map[string] *GenericProc
     owner           string
     connected       bool
+    CFRequestChan   chan CFRequest  //messages from server, directed to this device.  See also: CFResponseChan in cfa.go
+    FromAgentCFResponseChan  chan CFResponse
     EventCh         chan DevEvent
     BackupCh        chan BackupEvent     
     CFAFrameCh      chan BackupEvent
@@ -107,6 +110,8 @@ func NewDevice( config *Config, devTracker *DeviceTracker, udid string, bdev Bri
         process:         make( map[string] *GenericProc ),
         cf:              devTracker.cf,
         EventCh:         make( chan DevEvent ),
+        CFRequestChan:   make( chan CFRequest, 100 ), //There is only one consumer, but we allow messages to be queued while processing
+        FromAgentCFResponseChan:  make( chan CFResponse, 100 ),
         BackupCh:        make( chan BackupEvent ),
         CFAFrameCh:      make( chan BackupEvent ),
         bridge:          bdev,
@@ -229,23 +234,120 @@ func (self *Device) onWdaReady() {
     self.cf.notifyWdaStarted( self.udid, self.wdaPort )
 }
 
+//WARNING: avoid go threads within this loop, or functions called from within this loop.
+//         NEVER initiate a send() or receive() from within a go thread in this loop.
+//
+//         There is one event_loop thread per attached device, and this thread inspectings
+//         traffic in both directions.
+//         Requests must be forwarded to the iOS device FIFO, and returned to a calling application
+//         FIFO. As such, any processing should be done here as quickly as practical..
+//
+//         Both requests TO the device and responses FROM the device pass through this 
+//         event loop.  As a consequence, while processing, both requests and response 
+//         traffic halt while examining a message.  This is critical and intentional.
+//         It is possible that a single incoming request (For instance, "Launch Assistive Touch")
+//         can be implemented as multiple requests to the device. It is essential that these 
+//         requests be performed "atomically"(that is, without user-generated requests accidentally
+//         being inserted in the sequence from a secondary thread).  And, the handling code must 
+//         be able to intercept any responses from the device, without another thread shuffling
+//         them back to the server.  
+//
+//         Most of the time this is a non-issue.  The event_loop mostly touches each request or 
+//         response extremely briefly, then dumps it back on the wire.  In cases where it blocks traffic,
+//         it is necessary to block the traffic. IMO there is little performance left
+//         to be gained by a more complicated threading/locking model. (such as a dedicated reponse-handling 
+//         thread)
 func (self *Device) startEventLoop() {
     go func() {
+        fmt.Printf("Device.go: NEW THREAD. Starting device event loop %s\n",self.udid) 
+        LOOP:
         for {
-            event := <- self.EventCh
-            
+            select {
+            case cfrequest := <- self.CFRequestChan:
+                action := cfrequest.Action
+                log.Info("Device.go: request received ",action) 
+                //TODO: particular actions to look out for?
+                fmt.Printf("XX %s\n",action) 
+                handled := false
+                var errorstr string
+                if action == "showTaskSwitcher" || action == "taskSwitcher" {
+                    errorstr = self.ShowTaskSwitcher()
+                } else if action == "shake" {
+                    errorstr = self.shake()
+                } else if action == "showControlCenter" {
+                    errorstr = self.showControlCenter()
+                //} else if action == "startBroadcastApp" {
+                //    errorstr = self.startBroadcastApp()
+                } else if action == "dismissAlerts" {
+                    errorstr = self.dismissAlerts()
+                } else if action == "toggleAssistiveTouch" || action == "assistiveTouch" {
+                    errorstr = self.toggleAssistiveTouch()
+                } else if action == "showAssistiveTouch"  {
+                    errorstr = self.showAssistiveTouch()
+                } else if action == "hideAssistiveTouch"  {
+                    errorstr = self.hideAssistiveTouch()
+                } else if action == "startVideoStream" || action == "startStream" {
+                    errorstr = self.startVideoStream(cfrequest) 
+                } else if action == "stopVideoStream" {
+                    errorstr = self.stopVideoStream()
+                } else if action == "wifiIp" {
+                    errorstr = "Not Implemented"
+                    //responseOkValue(cfrequest,"TODO-WIFI-IP")
+//                    ip := dev.WifiIp()
+//                    mac := dev.WifiMac()
+                } else if action == "killApplication" {
+                    errorstr = self.killApplication( cfrequest.BundleID )
+                } else if action == "launchApplication" || action == "launch" {
+                    errorstr = self.launchApplication( cfrequest.BundleID )
+                } else if action == "allowApplication" || action == "allowApp" {
+                    errorstr = self.allowApplication( cfrequest.BundleID )
+                } else if action == "restrictApplication" || action == "restrictApp" {
+                    errorstr = self.restrictApplication( cfrequest.BundleID )
+                } else if action == "getRestrictedApplications" || action =="listRestrictedApps" {
+                    self.cf.ToServerCFResponseChan <- *NewOkValueResponse(cfrequest,self.restrictedApps)
+                    handled = true
+                } else if action == "initWebrtc" {
+                    self.initWebrtc(cfrequest)
+                    handled = true
+                }else{
+                    handled = true
+                    self.cfa.SendCFRequest(&cfrequest)
+                }
+                if !handled{ //TODO: we don't need to reply to all of these requests either...
+                    if errorstr != "" {
+                        self.cf.ToServerCFResponseChan <- *NewErrorResponse(cfrequest,errorstr)
+                    }else{
+                        self.cf.ToServerCFResponseChan <- *NewOkResponse(cfrequest)
+                    }
+                }
+
+
+            // There are two consumers of this channel. Here, we do the default action, which is to
+            // forward requests back to the server that initiated them.
+            //
+            // The second consumer is cfa.GetCFResponse(), which reads responses until it finds the 
+            // expected reply to its own requests.  GetCFResponse also calls device.defaultResponseHandler()
+            // on messages that do not "belong" to it.  This creates an unfortunate cyclic dependency 
+            // between cfa and device.... Also TODO, the line below obviously assumes CFA is already running,
+            // otherwise this would crash immediately...  Perhaps an additional channel between agent and
+            // device would be appropriate...
+            case cfresponse := <- self.FromAgentCFResponseChan:
+                self.defaultResponseHandler(cfresponse)
+            case event := <- self.EventCh:
+            //TODO: fix indent below.  I want to commit this change without confusing my modifications
+         
             action := event.action
             if action == DEV_STOP { // stop event loop
                 self.EventCh = nil
-                break
+                break LOOP
             } else if action == DEV_CFA_START { // CFA started
                 self.onCfaReady()
             } else if action == DEV_WDA_START { // CFA started
                 self.onWdaReady()
             } else if action == DEV_CFA_START_ERR {
-                fmt.Printf("Error starting/connecting to CFA.\n")
+                fmt.Printf("device event loop: Error starting/connecting to CFA.\n")
                 self.shutdown()
-                break
+                break LOOP
             } else if action == DEV_CFA_STOP { // CFA stopped
                 self.cfaRunning = false
                 self.cf.notifyCfaStopped( self.udid )
@@ -265,7 +367,7 @@ func (self *Device) startEventLoop() {
                 self.devAppChanged( event.data ) 
             }
         }
-        
+        }
         log.WithFields( log.Fields{
             "type": "dev_event_loop_stop",
             "udid": censorUuid( self.udid ),
@@ -277,6 +379,7 @@ func (self *Device) startEventLoop() {
 func (self *Device) startBackupFrameProvider() {
     go func() {
         sending := false
+        LOOP:
         for {
             select {
             case ev := <- self.BackupCh:
@@ -288,7 +391,7 @@ func (self *Device) startBackupFrameProvider() {
                     sending = false
                     fmt.Printf("backup video frame sender - disabling\n")
                 } else if action == VID_END {
-                    break
+                    break LOOP
                 }
             default:
             }
@@ -304,6 +407,7 @@ func (self *Device) startBackupFrameProvider() {
 func (self *Device) startCFAFrameProvider() {
     go func() {
         sending := false
+        LOOP:
         for {
             select {
                 case ev := <- self.CFAFrameCh:
@@ -315,7 +419,7 @@ func (self *Device) startCFAFrameProvider() {
                         sending = false
                         fmt.Printf("cfa frame provider - disabled\n")
                     } else if action == VID_END {
-                        break
+                        break LOOP
                     }
                 default:
             }
@@ -439,12 +543,12 @@ func (self *Device) startBackupVideo() {
     )
 }
 
-func (self *Device) devAppChanged( bundleId string ) {
+func (self *Device) devAppChanged( bundleID string ) {
     if self.cfa == nil {
         return
     }
     
-    self.cfa.AppChanged( bundleId )
+    self.cfa.AppChanged( bundleID )
 }
 
 func (self *Device) startProcs() {
@@ -482,12 +586,15 @@ func (self *Device) startProcs() {
                                 alert.match, alert.response )
                             if self.cfaRunning {
                                 useAlertMode = false
-                                btnX,btnY := self.cfa.SysElPos( "button", alert.response )
-                                if btnX == 0 {
+                                if !self.cfa.tapElement("button",alert.response,"application",0){                                
                                     fmt.Printf("Alert does not contain button \"%s\"\n", alert.response )
-                                } else {
-                                    self.cfa.clickAt( int(btnX),int(btnY) )
                                 }
+//                                btnX,btnY := self.cfa.SysElPos( "button", alert.response )
+//                                if btnX == 0 {
+//                                    fmt.Printf("Alert does not contain button \"%s\"\n", alert.response )
+//                                } else {
+//                                    self.cfa.clickAt( int(btnX),int(btnY) )
+//                                }
                             }
                             
                         }
@@ -671,7 +778,7 @@ func (self *Device) justStartBroadcast() {
     self.cfa.StartBroadcastStream( self.config.vidAppName, bid, self.devConfig )
 }
 
-func (self *Device) startVidStream() {
+func (self *Device) startVideoStream(cfrequest CFRequest) ( errorstr string) {
     conn := self.cf.connectVidChannel( self.udid )
     
     imgData := self.cfa.Screenshot()
@@ -708,11 +815,12 @@ func (self *Device) startVidStream() {
         fmt.Printf("Telling video stream to start\n")
         controlChan <- 1 // start
     }
+    return ""
 }
 
 func (self *Device) shutdownVidStream() {
     if self.vidOut != nil {
-        self.stopVidStream()
+        self.stopVideoStream()
     }
     ext_id := self.bridge.GetPid("vidstream_ext")
     if ext_id != 0 {
@@ -720,9 +828,10 @@ func (self *Device) shutdownVidStream() {
     }
 }
 
-func (self *Device) stopVidStream() {
+func (self *Device) stopVideoStream() ( errorstr string ){
     self.vidOut = nil
     self.cf.destroyVidChannel( self.udid )
+    return ""
 }
 
 func (self *Device) forwardVidPorts( udid string, onready func() ) {
@@ -767,34 +876,61 @@ func (self *Device) adaptToRotation( x int, y int ) (int,int) {
     return x,y
 }
 
-func (self *Device) clickAt( x int, y int ) {
-    x,y = self.adaptToRotation( x, y )
-    self.cfa.clickAt( x, y )
+// Called from two places.
+//    1. device default event_loop
+//    2. 
+// called principally from the event loop. 
+// this is the device's chance to do something
+// with a response, before forwarding back to ControlFloor where it will get sent back
+// to any listening client.
+//
+func (self *Device) defaultResponseHandler ( cfresponse CFResponse ){
+    //TODO: Put any logging here.
+    log.Info("Received response! ",cfresponse.Action,cfresponse.Status)
+    if self.cf!=nil && cfresponse.CFServerRequestID != 0{
+        //If the request was initiated elsewhere, then the response will be sent back based on the conditions below
+        if cfresponse.Error != "error" || cfresponse.Tag != "" || 
+           cfresponse.Value !=""       || cfresponse.CFServerRequiresAck > 0  || 
+           cfresponse.Action =="ping"  || strings.HasPrefix(cfresponse.Action,"get")  {
+
+            self.cf.ToServerCFResponseChan <- cfresponse
+
+        }
+    }else{
+       log.Info("Message not routeable to server: " )
+       bytes , _ := json.Marshal(cfresponse)
+       fmt.Println(string(bytes))
+    }
 }
 
-func (self *Device) doubleclickAt( x int, y int ) {
-    self.cfa.doubleclickAt( x, y )
-}
+//func (self *Device) clickAt( x int, y int ) {
+//    x,y = self.adaptToRotation( x, y )
+//    self.cfa.clickAt( x, y )
+//}
 
-func (self *Device) mouseDown( x int, y int ) {
-    self.cfa.mouseDown( x, y )
-}
+//func (self *Device) doubleClickAt( x int, y int ) {
+//    self.cfa.doubleClickAt( x, y )
+//}
 
-func (self *Device) mouseUp( x int, y int ) {
-    self.cfa.mouseUp( x, y )
-}
+//func (self *Device) mouseDown( x int, y int ) {
+//    self.cfa.mouseDown( x, y )
+//}
 
-func (self *Device) hardPress( x int, y int ) {
-    self.cfa.hardPress( x, y )
-}
+//func (self *Device) mouseUp( x int, y int ) {
+//    self.cfa.mouseUp( x, y )
+//}
 
-func (self *Device) longPress( x int, y int, time float64 ) {
-    self.cfa.longPress( x, y, time )
-}
+//func (self *Device) hardPress( x int, y int ) {
+//    self.cfa.hardPress( x, y )
+//}
 
-func (self *Device) home() {
-    self.cfa.home()
-}
+//func (self *Device) longPress( x int, y int, time float64 ) {
+//    self.cfa.longPress( x, y, time )
+//}
+
+//func (self *Device) home() {
+//    self.cfa.home()
+//}
 
 func findNodeWithAtt( cur uj.JNode, att string, label string ) uj.JNode {
     lNode := cur.Get(att)
@@ -814,69 +950,75 @@ func findNodeWithAtt( cur uj.JNode, att string, label string ) uj.JNode {
 }
 
 // Assumes AssistiveTouch is enabled already
-func (self *Device) openAssistiveTouch( pid int32 ) int {
-    y := 0
+func (self *Device) showAssistiveTouchMenu( pid int32 ) string {
+log.Warn("10 %v",pid)
+//    y := 0
     i := 0
     for {
+log.Warn("11")
         i++
         if i>10 {
-            fmt.Printf("AssistiveTouch icon did not appear\n")
-            return 0
+            return "AssistiveTouch icon did not appear"
+//            return 0
         }
-        json := self.cfa.ElByPid( int(pid), true )
-        // Todo; element may not be there
-        root, _ := uj.Parse( []byte(json) )
-        btnNode := findNodeWithAtt( root, "label", "AssistiveTouch menu" )
-        if btnNode == nil {
-            time.Sleep( time.Millisecond * 100 )
-            continue
+log.Warn("12")
+//        cfrequest := NewTapElementRequest("label","AssistiveTouch menu","",0)
+        cfrequest := NewTapElementRequest("","AssistiveTouch menu","",0)
+        cfrequest.ProcessID=json.Number(strconv.Itoa(int(pid)))
+        cfresponse := self.cfa.SendCFRequestAndWait(cfrequest)
+log.Warn("Called TapElement with response ",cfresponse.Error)
+        if(cfresponse.Error==""){
+            return ""
         }
-        x := btnNode.Get("x").Int()
-        y = btnNode.Get("y").Int()
-        x += 20
-        y += 20
         time.Sleep( time.Millisecond * 100 )
-        self.cfa.clickAt( x / 2, y / 2 )
-        break
     }
     
-    return y
+    return ""
 }
 
-func (self *Device) taskSwitcher() {
+//TODO: Re-enable, uses AppAtPoint
+func (self *Device) ShowTaskSwitcher() (errorstr string) {
     //self.cfa.Siri("activate assistivetouch")
-    
-    self.enableAssistiveTouch()
+    log.Warn("1")
+//    x,y := self.cfa.GetWindowSize()
+    errorstr = self.showAssistiveTouch()
+    if(errorstr != ""){
+        return errorstr
+    }
+    log.Warn("2")
     
     _, pid := self.isAssistiveTouchEnabled()
-    
-    y := self.openAssistiveTouch( pid )
-    
+    log.Warn("3")
+
+    if pid == 0{
+        return "Could not find process ID for assistive touch process"
+    }  
+
+    errorstr = self.showAssistiveTouchMenu( pid )
+    if (errorstr != ""){
+        return errorstr
+    }
+
+    log.Warn("4")
+
+
     i := 0
     for {
+        log.Warn("5")
         i++
         if i>10 {
-            fmt.Printf("Could not find multitasking button")
-            return
+            return "Could not find multitasking button"
         }
         
-        // TODO don't use hardcoded screen center
-        atJson := self.cfa.AppAtPoint( 187, y/2, true, true, false )
-        fmt.Println( atJson )
-        
-        root2, _ := uj.Parse( []byte(atJson) )
-        taskNode := findNodeWithAtt( root2, "label", "Multitasking" )
-        if taskNode == nil {
-            time.Sleep( time.Millisecond * 100 )
-            continue
+        //Untested. Need iOS 15
+        cfrequest := NewTapElementRequest("","Multitasking","",0)
+        cfrequest.ProcessID=json.Number(strconv.Itoa(int(pid)))
+        cfresponse := self.cfa.SendCFRequestAndWait(cfrequest)
+
+        if(cfresponse.Status =="ok"){
+            break
         }
-        x2 := taskNode.Get("x").Int()
-        y2 := taskNode.Get("y").Int()
-        x2 += 20
-        y2 += 20
         time.Sleep( time.Millisecond * 200 )
-        self.cfa.clickAt( x2 / 2, y2 / 2 )
-        break
     }
     
     // Todo: Wait for task switcher to actually appear
@@ -889,30 +1031,49 @@ func (self *Device) taskSwitcher() {
             fmt.Printf("Task Switcher did not appear\n")
             return
         }
-        centerScreenJson := self.cfa.AppAtPoint( 187, 333, true, true, true );
-        root3, _ := uj.Parse( []byte(centerScreenJson) )
-        closeBox := findNodeWithAtt( root3, "id", "appCloseBox" )
-        if closeBox != nil { break }
+        //XCTRunnerDaemonSession unregonized selector (iOS 14), untested...
+        //cfrequest := NewGetApplicationStructureAtPointRequest("","appCloseBox",x,y,0)
+        //try this for kicks instead, since the position seems irrelevant. I have no idea
+        cfrequest := NewGetApplicationStructureRequest("","appCloseBox",-1,0)
+        cfresponse := self.cfa.SendCFRequestAndWait(cfrequest)
+        if cfresponse.Status == "ok"{ 
+            break
+        }
+//        centerScreenJson := self.cfa.AppAtPoint( 187, 333, true, true, true );
+//        root3, _ := uj.Parse( []byte(centerScreenJson) )
+//        closeBox := findNodeWithAtt( root3, "id", "appCloseBox" )
+//        if closeBox != nil { break }
         time.Sleep( time.Millisecond * 100 )
         //fmt.Printf("Task switcher appeared\n")
     }
     
-    self.disableAssistiveTouch()
+    self.hideAssistiveTouch()
+    return ""
 }
 
-func (self *Device) shake() {
-    self.enableAssistiveTouch()
-    
-    self.disableAssistiveTouch()
+func (self *Device) shake() (errorstr string) {
+    self.showAssistiveTouch()
+    self.hideAssistiveTouch()
+    return ""
 }
 
-func (self *Device) cc() {
-    self.cfa.OpenControlCenter()
+func (self *Device) showControlCenter () (errorstr string) {
+   self.cfa.ShowControlCenter()
+   return ""
 }
+func (self *Device) dismissAlerts () (errorstr string) {
+   return self.cfa.DismissAlerts()
+}
+//func (self *Device) startBroadcastApp () (errorstr string) {
+//   return self.cfa.StartBroadcastApp()
+//}
 
 func (self *Device) isAssistiveTouchEnabled() (bool, int32) {
     var pid int32
     procs := self.bridge.ps()
+
+    fmt.Println("QQQQQQ %v",procs)
+
     for _,proc := range procs {
         if proc.name == "assistivetouchd" {
             pid = proc.pid
@@ -923,146 +1084,136 @@ func (self *Device) isAssistiveTouchEnabled() (bool, int32) {
     return false, 0
 }
 
-func (self *Device) enableAssistiveTouch() {
+func (self *Device) showAssistiveTouch() (errorstr string) {
     enabled, _ := self.isAssistiveTouchEnabled()
-    if !enabled { self.toggleAssistiveTouch() }
-    
-    /*i := 0
-    var pid int32
-    for {
-        i++
-        if i> 20 { // Wait up to 4 seconds for it to start
-            fmt.Printf("AssistiveTouch process did not start")
-            return
-        }
-        
-        procs := self.bridge.ps()
-        for _,proc := range procs {
-            if proc.name == "assistivetouchd" {
-                pid = proc.pid
-                break
-            } 
-        }
-        if pid != 0 { break }
-        time.Sleep( time.Millisecond * 200 )
-    }*/
+    if !enabled { 
+        return self.toggleAssistiveTouch() 
+    }
+    return ""
 }
 
-func (self *Device) disableAssistiveTouch() {
+func (self *Device) hideAssistiveTouch() (errorstr string) {
     enabled, _ := self.isAssistiveTouchEnabled()
-    if enabled { self.toggleAssistiveTouch() }
-    
-    /*i = 0
-    for {
-        i++
-        if i > 20 { // Wait up to 4 seconds for it to stop
-            fmt.Printf("AssistiveTouch process did not stop")
-            return
-        }
-        
-        procs := self.bridge.ps()
-        pid = 0
-        for _,proc := range procs {
-            if proc.name == "assistivetouchd" {
-                pid = proc.pid
-                break
-            } 
-        }
-        if pid == 0 { break }
-        time.Sleep( time.Millisecond * 200 )
-    }*/
+    if enabled { 
+        return self.toggleAssistiveTouch() 
+    }    
+    return ""
 }
-
-func (self *Device) toggleAssistiveTouch() {
+//TODO: error handling
+func (self *Device) toggleAssistiveTouch() (errorstr string) {
     cfa := self.cfa
-    self.cc()
+    self.showControlCenter()
+    time.Sleep( time.Second * 2 )
+    if(!self.cfa.tapElement("button","Accessibility Shortcuts","system",0)){
+        return "Did not find Accessibility Shortcuts in Control Center"
+    }
     
     time.Sleep( time.Second * 2 )
-    scutX,scutY := cfa.SysElPos( "button", "Accessibility Shortcuts" )
-    cfa.clickAt( int(scutX),int(scutY) )
-    
-    time.Sleep( time.Second * 2 )
-    atX,atY := cfa.SysElPos( "button", "AssistiveTouch" )
-    cfa.clickAt( int(atX),int(atY) )
+
+    if(!self.cfa.tapElement("button","AssistiveTouch","system",0)){
+        return "Failed to tap AssistiveTouch button after launching Accessibility Shortcuts menu"
+    }
     time.Sleep( time.Millisecond * 100 )
     cfa.home()
     time.Sleep( time.Millisecond * 300 )
     cfa.home()
+    return ""
 }
 
-func (self *Device) iohid( page int, code int ) {
-    self.cfa.ioHid( page, code )
-}
+//func (self *Device) iohid( page int, code int ) {
+//    self.cfa.ioHid( page, code )
+//}
 
-func (self *Device) swipe( x1 int, y1 int, x2 int, y2 int, delayBy100 int ) {
-    delay := float64( delayBy100 ) / 100.0
-    x1,y1 = self.adaptToRotation( x1, y1 )
-    x2,y2 = self.adaptToRotation( x2, y2 )
-    self.cfa.swipe( x1, y1, x2, y2, delay )
-}
+//func (self *Device) swipe( x1 int, y1 int, x2 int, y2 int, delayBy100 int ) {
+//    delay := float64( delayBy100 ) / 100.0
+//    x1,y1 = self.adaptToRotation( x1, y1 )
+//    x2,y2 = self.adaptToRotation( x2, y2 )
+//    self.cfa.swipe( x1, y1, x2, y2, delay )
+//}
 
-func (self *Device) keys( keys string ) {
-    parts := strings.Split( keys, "," )
-    codes := []int{}
-    for _, key := range parts {
-        code, _ := strconv.Atoi( key )
-        //fmt.Printf("%s becomes %d\n", key, code )
-        codes = append( codes, code )
-    }
-    self.cfa.keys( codes )
-}
+//func (self *Device) keys( keys string ) {
+//    parts := strings.Split( keys, "," )
+//    codes := []int{}
+//    for _, key := range parts {
+//        code, _ := strconv.Atoi( key )
+//        //fmt.Printf("%s becomes %d\n", key, code )
+//        codes = append( codes, code )
+//    }
+//    self.cfa.keys( codes )
+//}
 
-func (self *Device) text( text string ) {
-    self.cfa.text( text )
-}
+//func (self *Device) text( text string ) {
+//    self.cfa.text( text )
+//}
+//func (self *Device) specialKey( code string ) {
+//    self.cfa.specialKey( code )
+//}
 
-func (self *Device) source() string {
-    return self.cfa.SourceJson()
-}
+//func (self *Device) source() string {
+//    return self.cfa.SourceJson()
+//}
 
 func (self *Device) WifiIp() string {
     return self.cfa.WifiIp()
 }
 
-func (self *Device) AppAtPoint(x int, y int) string {
-    return self.cfa.AppAtPoint(x,y,false,false,false)
-}
-
+//TODO: re-enable
+/*
+//func (self *Device) AppAtPoint(x int, y int) string {
+//    return self.cfa.AppAtPoint(x,y,false,false,false)
+//}
+*/
+/* TODO reenable
 func (self *Device) WifiMac() string {
     info := self.bridge.info( []string{"WiFiAddress"} )
     val, ok := info["WiFiAddress"]
-    if ok { return val }
+    if ok { 
+    return val }
     return "unknown"
 }
-
-func (self *Device) killBid( bid string ) {
-    self.bridge.KillBid( bid )
+*/
+func (self *Device) killApplication( bundleID string ) ( errorstr string ){
+    self.bridge.KillBid( bundleID )
+    return ""
 }
 
-func (self *Device) launch( bid string ) {
-    self.bridge.Launch( bid )
+//func respondOk(cfrequest CFRequest) (*CFResponse){
+//    if cfrequest.CFServerRequestID && self.cf != nil {
+//        self.cf.ToServerCFResponseChan <- NewOkResponse(cfrequest)
+//    }
+//}
+//func respondOkValue(cfrequest CFRequest, i interface{}){
+//    if cfrequest.CFServerRequestID && self.cf != nil {
+//        self.cf.ToServerCFResponseChan <- NewOkValueResponse(cfrequest,i)
+//    }
+//}
+
+func (self *Device) launchApplication( bundleID string ) (errorstr string){
+    self.bridge.Launch( bundleID )
+    return ""
 }
 
-func (self *Device) restrictApp( bid string ) {
-    fmt.Printf("Restricting app %s\n", bid )
+func (self *Device) restrictApplication( bundleID string ) (errorstr string){
+    fmt.Printf("Restricting app %s\n", bundleID )
   
     exists := false
     for _,abid := range self.restrictedApps {
-        if abid == bid { exists = true }
+        if abid == bundleID { exists = true }
     }
     if exists { return }
     
-    dbRestrictApp( self.udid, bid )
-    self.restrictedApps = append( self.restrictedApps, bid ) 
+    dbRestrictApp( self.udid, bundleID )
+    self.restrictedApps = append( self.restrictedApps, bundleID ) 
+    return ""
 }
 
-func (self *Device) allowApp( bid string ) {
-    fmt.Printf("Allowing app %s\n", bid )
+func (self *Device) allowApplication( bundleID string ) ( errorstr string ){
+    fmt.Printf("Allowing app %s\n", bundleID )
     
     newList := []string{}
     exists := false
     for _,abid := range self.restrictedApps {
-        if abid == bid {
+        if abid == bundleID {
             exists = true
         } else {
             newList = append( newList, abid )
@@ -1070,8 +1221,9 @@ func (self *Device) allowApp( bid string ) {
     }
     if !exists { return }
     
-    dbAllowApp( self.udid, bid )
+    dbAllowApp( self.udid, bundleID )
     self.restrictedApps = newList
+    return ""
 }
 
 func (self *Device) onRtcMsg( msg webrtc.DataChannelMessage ) {
@@ -1191,7 +1343,8 @@ func (self *Device) startVidStreamRtc() {
     }
 }
 
-func (self *Device) initWebrtc( offer string ) string {
+func (self *Device) initWebrtc( cfrequest CFRequest ) (){
+    offer := cfrequest.Offer
     fmt.Printf("Running initWebrt\n")
     peer, answer := startWebRtc( 
         offer,
@@ -1210,6 +1363,6 @@ func (self *Device) initWebrtc( offer string ) string {
     )
     fmt.Printf("Running initWebrt - Got answer\n")
     self.rtcPeer = peer
-  
-    return answer
+    
+    self.cf.ToServerCFResponseChan <- *NewOkValueResponse(cfrequest, answer)
 }

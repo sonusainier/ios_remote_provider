@@ -113,7 +113,7 @@ func (self *AppStream) openControl() (mangos.Socket,bool,chan bool) {
                 fmt.Printf("video ping -> fail\n" )
                 self.controlMutex.Unlock()
                 controlStopChan <- true
-                break
+                break 
             }
             
             _, err = self.controlSocket.Recv()
@@ -323,7 +323,7 @@ func ( self *AppStream) dialAppVideo() ( mangos.Socket, int, chan bool ) {
             "type": "err_socket_dial",
             "spec": vidSpec,
             "err":  err,
-        } ).Info("Socket dial error")
+        } ).Info("Socket dial error2")
         return nil, 2, nil
     }
     
@@ -369,7 +369,7 @@ func (self *AppStream) dialAppControl() ( mangos.Socket, int, chan bool ) {
             "type": "err_socket_dial",
             "spec": controlSpec,
             "err":  err,
-        } ).Info("Socket dial error")
+        } ).Info("Socket dial error3")
         return nil, 2, nil
     }
     
@@ -403,7 +403,7 @@ func (self *AppStream) dialAppLog() ( mangos.Socket, int, chan bool ) {
             "type": "err_socket_dial",
             "spec": logSpec,
             "err":  err,
-        } ).Info("Socket dial error")
+        } ).Info("Socket dial error4")
         return nil, 2, nil
     }
     

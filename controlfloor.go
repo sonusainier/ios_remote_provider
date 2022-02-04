@@ -35,6 +35,7 @@ type ControlFloor struct {
     DevTracker *DeviceTracker
     vidConns   map[string] *ws.Conn
     selfSigned bool
+    ToServerCFResponseChan chan CFResponse //Queue messages here to forward to Control Floor Server
 }
 
 func NewControlFloor( config *Config ) (*ControlFloor, chan bool) {
@@ -66,6 +67,7 @@ func NewControlFloor( config *Config ) (*ControlFloor, chan bool) {
         client: client,
         pass: pass,
         lock: &sync.Mutex{},
+        ToServerCFResponseChan: make( chan CFResponse, 100 ),
         vidConns: make( map[string] *ws.Conn ),
     }
     if config.https {
@@ -87,11 +89,13 @@ func NewControlFloor( config *Config ) (*ControlFloor, chan bool) {
     stopCf := make( chan bool )
     go func() {
         exit := false
+        log.Info("ControlFloor: new thread. Server auto-reconnect1")
+        LOOP:
         for {
             select {
               case <- stopCf:
                 exit = true
-                break
+                break LOOP
               default:
             }
             if exit { break }
@@ -109,76 +113,76 @@ func NewControlFloor( config *Config ) (*ControlFloor, chan bool) {
                 continue
             }
             
-            self.DevTracker.cfReady()
-            
             self.openWebsocket()
+            log.Info("ControlFloor: new thread. Server auto-reconnect2")
+            
         }
     }()
     
     return &self, stopCf
 }
+//TODO:  Rename.  Q&D for a naming conflict
+//type CFResponseXX interface {
+//    asText() (string)
+//}
 
-type CFResponse interface {
-    asText() (string)
-}
+//type CFR_Pong struct {
+//    id   int
+//    text string
+//}
 
-type CFR_Pong struct {
-    id   int
-    text string
-}
+//func (self *CFR_Pong) asText() string {
+//    return fmt.Sprintf("{id:%d,text:\"%s\"}\n",self.id, self.text)
+//}
 
-func (self *CFR_Pong) asText() string {
-    return fmt.Sprintf("{id:%d,text:\"%s\"}\n",self.id, self.text)
-}
+//type CFR_Source struct {
+//    Id     int    `json:"id"`
+//    Source string `json:"source"`
+//}
 
-type CFR_Source struct {
-    Id     int    `json:"id"`
-    Source string `json:"source"`
-}
+//func (self *CFR_Source) asText() string {
+//    bytes, _ := json.Marshal( self )
+//    return string(bytes)
+//}
 
-func (self *CFR_Source) asText() string {
-    text, _ := json.Marshal( self )
-    return string(text)
-}
+//type CFR_WifiIp struct {
+//    Id int     `json:"id"`
+//    Ip string  `json:"ip"`
+//    Mac string `json:"mac"`
+//}
 
-type CFR_WifiIp struct {
-    Id int     `json:"id"`
-    Ip string  `json:"ip"`
-    Mac string `json:"mac"`
-}
+//func (self *CFR_WifiIp) asText() string {
+//    text, _ := json.Marshal( self )
+//    return string(text)
+//}
 
-func (self *CFR_WifiIp) asText() string {
-    text, _ := json.Marshal( self )
-    return string(text)
-}
+//type CFR_InitWebrtc struct {
+//    Id     int    `json:"id"`
+//    Answer string `json:"answer"`
+//}
+//func (self *CFR_InitWebrtc) asText() string {
+//    text, _ := json.Marshal( self )
+//    return string(text)
+//}
 
-type CFR_InitWebrtc struct {
-    Id     int    `json:"id"`
-    Answer string `json:"answer"`
-}
-func (self *CFR_InitWebrtc) asText() string {
-    text, _ := json.Marshal( self )
-    return string(text)
-}
+//type CFR_RestrictedApps struct {
+//    Id int     `json:"id"`
+//    Bids []string  `json:"bids"`
+//}
+//func (self *CFR_RestrictedApps) asText() string {
+//    text, _ := json.Marshal( self )
+//    return string(text)
+//}
 
-type CFR_RestrictedApps struct {
-    Id int     `json:"id"`
-    Bids []string  `json:"bids"`
-}
-func (self *CFR_RestrictedApps) asText() string {
-    text, _ := json.Marshal( self )
-    return string(text)
-}
+//func ( self *ControlFloor ) startVidStream( udid string ) {
+//    dev := self.DevTracker.getDevice( udid )
+//    dev.startVidStream()
+//}
 
-func ( self *ControlFloor ) startVidStream( udid string ) {
-    dev := self.DevTracker.getDevice( udid )
-    dev.startVidStream()
-}
-
-func ( self *ControlFloor ) stopVidStream( udid string ) {
-    dev := self.DevTracker.getDevice( udid )
-    dev.stopVidStream()
-}
+//func ( self *ControlFloor ) stopVidStream( udid string ) {
+//    dev := self.DevTracker.getDevice( udid )
+//    dev.stopVidStream()
+//}
 
 // Called from the device object
 func ( self *ControlFloor ) connectVidChannel( udid string ) *ws.Conn {
@@ -260,24 +264,35 @@ func ( self *ControlFloor ) openWebsocket() {
         panic( err )
     }
     
-    respondChan := make( chan CFResponse )
+    //respondChan := make( chan CFResponseXX )
     doneChan := make( chan bool )
     // response channel exists so that multiple threads can queue
     //   responses. WriteMessage is not thread safe
-    go func() { for {
+    go func() { 
+        log.Info("ControlFloor: new thread. ToServerCFResponseChan -> send to server")
+        LOOP:
+        for { //TODO: indent
         select {
             case <- doneChan:
-                break
-            case resp := <- respondChan:
-                rText := resp.asText()
-                err := conn.WriteMessage( ws.TextMessage, []byte(rText) )
-                //fmt.Printf( "Wrote response back: %s\n", rText )
+                fmt.Println("Control Floor -> server, received message to terminate....")
+                break LOOP
+//            case resp := <- respondChan:
+            case cfresponse := <- self.ToServerCFResponseChan:
+//                rText := resp.asText()
+                bytes, _ := json.Marshal( cfresponse )
+                err := conn.WriteMessage( ws.TextMessage, bytes )
                 if err != nil {
-                    fmt.Printf("Error writing to ws\n")
-                    break
+                    fmt.Printf("Error writing to server ws\n")
+                    break LOOP
+                }else{
+                    fmt.Printf( "Wrote response back: %s\n", string(bytes) )
                 }
         }
-    } }()
+    } 
+    log.Info("ControlFloor: terminated thread. ToServerCFResponseChan -> send to server")
+
+    }()
+    self.DevTracker.cfReady()
     
     /*go func() { for {
         err := conn.WriteMessage( ws.TextMessage, []byte("{id:0,type:'ping'}") )
@@ -290,251 +305,47 @@ func ( self *ControlFloor ) openWebsocket() {
     // There is only a single websocket connection between a provider and controlfloor
     // As a result, all messages sent here ought to be small, because if they aren't
     // other messages will be delayed being received and some action started.
+//    go func(){ //TODO: re-indent
+//    log.Info("ControlFloor: new thread. From Server -> device[udid].CFRequestChan")
+//NOTE:  The current thread is the auto-reconnect thread
     for {
         t, msg, err := conn.ReadMessage()
         if err != nil {
             fmt.Printf("Error reading from ws\n")
             break
         }
-        if t == ws.TextMessage {
-            //tMsg := string( msg )
-            b1 := []byte{ msg[0] }
-            if string(b1) == "{" {
-                root, _ := uj.Parse( msg )
-                id := root.Get("id").Int()
-                mType := root.Get("type").String()
-                if mType == "pong" {
-                    
-                } else if mType == "ping" {
-                    respondChan <- &CFR_Pong{ id: id, text: "pong" }
-                } else if mType == "click" {
-                    udid := root.Get("udid").String()
-                    x := root.Get("x").Int()
-                    y := root.Get("y").Int()
-                    go func() {
-                        dev := self.DevTracker.getDevice( udid )
-                        if dev != nil {
-                            dev.clickAt( x, y )
-                        }
-                        respondChan <- &CFR_Pong{ id: id, text: "done" }
-                    } ()
-                } else if mType == "doubleclick" {
-                    udid := root.Get("udid").String()
-                    x := root.Get("x").Int()
-                    y := root.Get("y").Int()
-                    go func() {
-                        dev := self.DevTracker.getDevice( udid )
-                        if dev != nil {
-                            dev.doubleclickAt( x, y )
-                        }
-                        respondChan <- &CFR_Pong{ id: id, text: "done" }
-                    } ()
-                }else if mType == "mouseDown" {
-                    udid := root.Get("udid").String()
-                    x := root.Get("x").Int()
-                    y := root.Get("y").Int()
-                    go func() {
-                        dev := self.DevTracker.getDevice( udid )
-                        if dev != nil {
-                            dev.mouseDown( x, y )
-                        }
-                        respondChan <- &CFR_Pong{ id: id, text: "done" }
-                    } ()
-                } else if mType == "mouseUp" {
-                    udid := root.Get("udid").String()
-                    x := root.Get("x").Int()
-                    y := root.Get("y").Int()
-                    go func() {
-                        dev := self.DevTracker.getDevice( udid )
-                        if dev != nil {
-                            dev.mouseUp( x, y )
-                        }
-                        respondChan <- &CFR_Pong{ id: id, text: "done" }
-                    } ()
-                } else if mType == "hardPress" {
-                    udid := root.Get("udid").String()
-                    x := root.Get("x").Int()
-                    y := root.Get("y").Int()
-                    go func() {
-                        dev := self.DevTracker.getDevice( udid )
-                        if dev != nil {
-                            dev.hardPress( x, y )
-                        }
-                    } ()
-                } else if mType == "longPress" {
-                    udid := root.Get("udid").String()
-                    x := root.Get("x").Int()
-                    y := root.Get("y").Int()
-                    time, _ := strconv.ParseFloat( root.Get("time").String(), 64 )
-                    
-                    go func() {
-                        dev := self.DevTracker.getDevice( udid )
-                        if dev != nil {
-                            dev.longPress( x, y, time )
-                        }
-                        respondChan <- &CFR_Pong{ id: id, text: "done" }
-                    } ()
-                } else if mType == "home" {
-                    udid := root.Get("udid").String()
-                    go func() {
-                        dev := self.DevTracker.getDevice( udid )
-                        if dev != nil {
-                            dev.home()
-                        }
-                        respondChan <- &CFR_Pong{ id: id, text: "done" }
-                    } ()
-                } else if mType == "taskSwitcher" {
-                    udid := root.Get("udid").String()
-                    go func() {
-                        dev := self.DevTracker.getDevice( udid )
-                        if dev != nil {
-                            dev.taskSwitcher()
-                        }
-                        respondChan <- &CFR_Pong{ id: id, text: "done" }
-                    } ()
-                } else if mType == "shake" {
-                    udid := root.Get("udid").String()
-                    go func() {
-                        dev := self.DevTracker.getDevice( udid )
-                        if dev != nil {
-                            dev.shake()
-                        }
-                        respondChan <- &CFR_Pong{ id: id, text: "done" }
-                    } ()
-                } else if mType == "cc" {
-                    udid := root.Get("udid").String()
-                    go func() {
-                        dev := self.DevTracker.getDevice( udid )
-                        if dev != nil {
-                            dev.cc()
-                        }
-                        respondChan <- &CFR_Pong{ id: id, text: "done" }
-                    } ()
-                } else if mType == "assistiveTouch" {
-                    udid := root.Get("udid").String()
-                    go func() {
-                        dev := self.DevTracker.getDevice( udid )
-                        if dev != nil {
-                            dev.toggleAssistiveTouch()
-                        }
-                        respondChan <- &CFR_Pong{ id: id, text: "done" }
-                    } ()
-                } else if mType == "iohid" {
-                    udid := root.Get("udid").String()
-                    go func() {
-                        dev := self.DevTracker.getDevice( udid )
-                        if dev != nil {
-                            page := root.Get("page").Int()
-                            code := root.Get("code").Int()
-                            dev.iohid( page, code )
-                        }
-                    } ()
-                } else if mType == "swipe" {
-                    udid := root.Get("udid").String()
-                    x1 := root.Get("x1").Int()
-                    y1 := root.Get("y1").Int()
-                    x2 := root.Get("x2").Int()
-                    y2 := root.Get("y2").Int()
-                    delay := root.Get("delay").Int()
-                    go func() {
-                        dev := self.DevTracker.getDevice( udid )
-                        if dev != nil {
-                            dev.swipe( x1, y1, x2, y2, delay )
-                        }
-                        respondChan <- &CFR_Pong{ id: id, text: "done" }
-                    } ()
-                } else if mType == "keys" {
-                    udid := root.Get("udid").String()
-                    keys := root.Get("keys").String()
-                    go func() {
-                        dev := self.DevTracker.getDevice( udid )
-                        if dev != nil {
-                            dev.keys( keys )
-                        }
-                        respondChan <- &CFR_Pong{ id: id, text: "done" }
-                    } ()
-                } else if mType == "text" {
-                    udid := root.Get("udid").String()
-                    text := root.Get("text").StringEscaped()
-                    go func() {
-                        dev := self.DevTracker.getDevice( udid )
-                        if dev != nil {
-                            dev.text( text )
-                        }
-                        respondChan <- &CFR_Pong{ id: id, text: "done" }
-                    } ()
-                } else if mType == "startStream" {
-                    udid := root.Get("udid").String()
-                    fmt.Printf("Got request to start video stream for %s\n", udid )
-                    go func() { self.startVidStream( udid ) }()
-                } else if mType == "stopStream" {
-                    udid := root.Get("udid").String()
-                    go func() { self.stopVidStream( udid ) }()
-                } else if mType == "source" {
-                    udid := root.Get("udid").String()
-                    go func() {
-                        dev := self.DevTracker.getDevice( udid )
-                        if dev != nil {
-                            source := dev.source()
-                            respondChan <- &CFR_Source{ Id: id, Source: source } 
-                        } else  {
-                            respondChan <- &CFR_Pong{ id: id, text: "done" }
-                        }
-                    } ()
-                } else if mType == "wifiIp" {
-                    udid := root.Get("udid").String()
-                    go func() {
-                        dev := self.DevTracker.getDevice( udid )
-                        if dev != nil {
-                            ip := dev.WifiIp()
-                            mac := dev.WifiMac()
-                            respondChan <- &CFR_WifiIp{ Id: id, Ip: ip, Mac: mac } 
-                        } else  {
-                            respondChan <- &CFR_Pong{ id: id, text: "done" }
-                        }
-                    } ()
-                } else if mType == "shutdown" {
-                    do_shutdown( self.config, self.DevTracker )
-                } else if mType == "kill" {
-                    udid := root.Get("udid").String()
-                    bid := root.Get("bid").String()
-                    dev := self.DevTracker.getDevice( udid )
-                    dev.killBid( bid )
-                    respondChan <- &CFR_Pong{ id: id, text: "done" }
-                } else if mType == "launch" {
-                    udid := root.Get("udid").String()
-                    bid := root.Get("bid").String()
-                    dev := self.DevTracker.getDevice( udid )
-                    dev.launch( bid )
-                    respondChan <- &CFR_Pong{ id: id, text: "done" }
-                } else if mType == "allowApp" {
-                    udid := root.Get("udid").String()
-                    bid := root.Get("bid").String()
-                    dev := self.DevTracker.getDevice( udid )
-                    dev.allowApp( bid )
-                    respondChan <- &CFR_Pong{ id: id, text: "done" }
-                } else if mType == "restrictApp" {
-                    udid := root.Get("udid").String()
-                    bid := root.Get("bid").String()
-                    dev := self.DevTracker.getDevice( udid )
-                    dev.restrictApp( bid )
-                    respondChan <- &CFR_Pong{ id: id, text: "done" }
-                } else if mType == "listRestrictedApps" {
-                    udid := root.Get("udid").String()
-                    dev := self.DevTracker.getDevice( udid )
-                    rApps := dev.restrictedApps
-                    respondChan <- &CFR_RestrictedApps{ Id: id, Bids: rApps }
-                } else if mType == "initWebrtc" {
-                    udid := root.Get("udid").String()
-                    offer := root.Get("offer").String()
-                    dev := self.DevTracker.getDevice( udid )
-                    answer := dev.initWebrtc( offer )
-                    respondChan <- &CFR_InitWebrtc{ Id: id, Answer: answer }
-                }
+        if t != ws.TextMessage {
+           fmt.Printf("Received non-text message, type: %v",t)
+        }
+
+        var cfrequest CFRequest;
+        err = json.Unmarshal([]byte(msg),&cfrequest);
+        if err != nil {
+            fmt.Printf("Error decoding cfrequest1.\n %v\n%s\n\n",err,msg)
+            continue
+        }
+        deviceID := cfrequest.CFDeviceID
+        action   := cfrequest.Action
+        if cfrequest.CFDeviceID == "" || cfrequest.CFServerRequestID == 0 || cfrequest.Action =="" {
+            if cfrequest.Action == "ping" && cfrequest.CFDeviceID==""{
+                self.ToServerCFResponseChan <- *NewPongResponse(cfrequest)
+                fmt.Printf("Reply to server ping: pong\n")
+            }else{
+                fmt.Printf("Dropping message with no return address %s\n",msg)
             }
+            continue //TODO: error reply
+        }
+        if action == "shutdown" {
+            self.ToServerCFResponseChan <- *NewOkResponse(cfrequest)
+            do_shutdown( self.config, self.DevTracker )
+        }else{
+            //TODO: make controlfloor single-device?
+            dev := self.DevTracker.getDevice( deviceID )
+            dev.CFRequestChan <- cfrequest
         }
     }
-    
+//    log.Info("ControlFloor: terminated thread. From Server -> device[udid].CFRequestChan")
+//    }()
     doneChan <- true
 }
 
@@ -609,19 +420,25 @@ func (self *ControlFloor) baseNotify( name string, udid string, variant string, 
 }
 
 func (self *ControlFloor) orientationChange( udid string, orientation string ) {
-    ok := self.checkLogin()
-    if ok == false {
-        panic("Could not login when notifying of orientation change to '" + orientation + "' notify")
-    }
-    
-    resp, _ := self.client.PostForm( self.base + "/provider/device/orientation", url.Values{
-        "udid": {udid},
-        "orientation": {orientation},
-    } )
-    
-    // Ensure the request is closed out
-    defer resp.Body.Close()
-    ioutil.ReadAll(resp.Body)
+      log.WithFields( log.Fields{
+         "type": "cf_notify",
+         "udid": censorUuid( udid ),
+      } ).Info( fmt.Sprintf("Notifying CF of Orientation Change %s", orientation) )
+     
+      self.ToServerCFResponseChan <- *NewOrientationChangedNotice(udid,orientation)
+//    ok := self.checkLogin()
+//    if ok == false {
+//        panic("Could not login when notifying of orientation change to '" + orientation + "' notify")
+//    }
+//    
+//    resp, _ := self.client.PostForm( self.base + "/provider/device/orientation", url.Values{
+//        "udid": {udid},
+//        "orientation": {orientation},
+//    } )
+//    
+//    // Ensure the request is closed out
+//    defer resp.Body.Close()
+//    ioutil.ReadAll(resp.Body)
 }
 
 func productTypeToCleanName( prodType string ) string {

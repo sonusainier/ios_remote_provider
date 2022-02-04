@@ -1,0 +1,58 @@
+When running 
+./main interactive
+
+you can send commands directly to the device at the console.  Some samples:
+
+{"action":"ping","tag":"reply"}
+{"action":"noop","tag":"reply"}
+
+{"action":"tap","x":55,"y":135}
+{"action":"getOrientation"}
+
+{"action":"typeSpecialKey","key":"ArrowLeft"}
+{"action":"getAlertInfo"}
+
+{"action":"startBroadcastApp"}  //this crashes 
+
+
+{"action":"getApplicationStructure", "elementSearchOrder":"system","processId":"-1","elementId":"Allow Once"}
+
+
+{"action":"tap","elementId":"Accessibility Shortcuts","elementType":"button","elementSearchPath":"system","timeout":0.000000,"cfprid":21,"cfpack":1}
+{"action":"getApplicationStructure", "elementSearchOrder":"system","processId":"-1"}
+
+{"action":"launchApplication", "bundleId":"com.apple.mobilenotes"}
+{"action":"typeText", "text":"Hello World"}
+{"action":"getRestrictedApplications"}
+{"action":"restrictApplication", "bundleId":"com.apple.mobilenotes"}
+{"action":"allowApplication", "bundleId":"com.apple.mobilenotes"}
+{"action":"showControlCenter"}
+{"action":"shake"}
+{"action":"showTaskSwitcher"}
+{"action":"swipe","x1":187,"y1":700,"x2":466,"y2":0.2,"duration":0.5}
+{"action":"getWindowSize"}
+{"action":"swipe","x1":187,"y1":668,"x2":466,"y2":0.2}
+{"action":"simulateHomeButton"}
+{"action":"simulateHomeButton"}
+{"action":"simulateHomeButton"}
+{"action":"getApplicationStructure", "processId":"-1"}
+{"action":"getApplicationStructure"}
+{"action":"getActiveApplicationPids"}
+{"action":"toggleAssistiveTouch"}
+{"action":"showTaskSwitcher"}
+
+{"action":"getApplicationStructure", "processId":"8032","ElementSearchOrder":"system"}
+{"action":"getApplicationStructureAtPoint", "x":50,"y":50}
+
+{"action":"getApplicationStructure", "processId":"8032","ElementSearchOrder":"system","ElementId":"AssistiveTouchNubbit"}
+{"action":"getApplicationStructure", "processId":"8032","ElementSearchOrder":"system","ElementId":"AssistiveTouch menu"}
+{"action":"tap", "processId":"8032","ElementSearchOrder":"system","ElementId":"AssistiveTouchNubbit"}
+{"action":"tap", "processId":"8032","ElementSearchOrder":"system","ElementId":"AssistiveTouchNubbit"}
+
+
+{"action":"swipe","x2":187,"y2":668,"x1":466,"y1":0.2}
+
+{"action":"swipe","x1":187,"y1":700,"x2":466,"y2":0.2,"duration":0.2}
+
+{"action":"swipe","x1":187,"y1":700,"x2":466,"y2":600,"duration":0.1}
+
