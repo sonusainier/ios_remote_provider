@@ -1191,3 +1191,16 @@ func (self *CFA) RestartStreaming() {
 	}
 	self.ToLauncher()
 }
+
+func (self *CFA) RotateDevice(orientation string) {
+	msg := CFR_RotateDevice{
+		Action:      "setOrientation",
+		Orientation: orientation,
+	}
+	bytes, _ := json.Marshal(msg)
+
+	log.Info("sending " + string(bytes))
+
+	self.nngSocket.Send(bytes)
+	self.nngSocket.Recv()
+}

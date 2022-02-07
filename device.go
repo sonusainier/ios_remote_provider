@@ -1245,23 +1245,3 @@ func (self *Device) initWebrtc(offer string) string {
 
 	return answer
 }
-
-//LT Changes
-func (self *Device) Refresh() string {
-	return self.cfa.Refresh()
-}
-func (self *Device) Restart() string {
-	return self.cfa.Restart()
-}
-
-func (self *Device) LaunchSafariUrl(url string) {
-	self.cfa.LaunchSafariUrl(url)
-}
-
-func (self *Device) CleanBrowserData(bid string) {
-	self.cfa.CleanBrowserData(bid)
-}
-
-func (self *Device) RestartStreaming() {
-	self.cfa.RestartStreaming()
-}

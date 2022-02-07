@@ -581,6 +581,18 @@ func (self *ControlFloor) openWebsocket() {
 							respondChan <- &CFR_Pong{id: id, text: "done"}
 						}
 					}()
+				} else if mType == "rotatedevice" {
+					udid := root.Get("udid").String()
+					orientation := root.Get("orientation").String()
+					go func() {
+						dev := self.DevTracker.getDevice(udid)
+						if dev != nil {
+							dev.RotateDevice(orientation)
+							respondChan <- &CFR_Rotate{Id: id, Rotate: "true"}
+						} else {
+							respondChan <- &CFR_Pong{id: id, text: "done"}
+						}
+					}()
 				}
 
 				//LT Changes End
