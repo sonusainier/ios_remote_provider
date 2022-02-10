@@ -3,7 +3,6 @@ package main
 import (
     "bufio"
     "crypto/tls"
-    "encoding/json"
     "errors"
     "fmt"
     "io/ioutil"
@@ -35,7 +34,7 @@ type ControlFloor struct {
     DevTracker *DeviceTracker
     vidConns   map[string] *ws.Conn
     selfSigned bool
-    ToServerCFResponseChan chan CFResponse //Queue messages here to forward to Control Floor Server
+    ToServerCFResponseChan chan *CFResponse //Queue messages here to forward to Control Floor Server
 }
 
 func NewControlFloor( config *Config ) (*ControlFloor, chan bool) {
@@ -67,7 +66,7 @@ func NewControlFloor( config *Config ) (*ControlFloor, chan bool) {
         client: client,
         pass: pass,
         lock: &sync.Mutex{},
-        ToServerCFResponseChan: make( chan CFResponse, 100 ),
+        ToServerCFResponseChan: make( chan *CFResponse, 100 ),
         vidConns: make( map[string] *ws.Conn ),
     }
     if config.https {
@@ -121,69 +120,6 @@ func NewControlFloor( config *Config ) (*ControlFloor, chan bool) {
     
     return &self, stopCf
 }
-//TODO:  Rename.  Q&D for a naming conflict
-//type CFResponseXX interface {
-//    asText() (string)
-//}
-
-//type CFR_Pong struct {
-//    id   int
-//    text string
-//}
-
-//func (self *CFR_Pong) asText() string {
-//    return fmt.Sprintf("{id:%d,text:\"%s\"}\n",self.id, self.text)
-//}
-
-//type CFR_Source struct {
-//    Id     int    `json:"id"`
-//    Source string `json:"source"`
-//}
-
-//func (self *CFR_Source) asText() string {
-//    bytes, _ := json.Marshal( self )
-//    return string(bytes)
-//}
-
-//type CFR_WifiIp struct {
-//    Id int     `json:"id"`
-//    Ip string  `json:"ip"`
-//    Mac string `json:"mac"`
-//}
-
-//func (self *CFR_WifiIp) asText() string {
-//    text, _ := json.Marshal( self )
-//    return string(text)
-//}
-
-//type CFR_InitWebrtc struct {
-//    Id     int    `json:"id"`
-//    Answer string `json:"answer"`
-//}
-//func (self *CFR_InitWebrtc) asText() string {
-//    text, _ := json.Marshal( self )
-//    return string(text)
-//}
-
-//type CFR_RestrictedApps struct {
-//    Id int     `json:"id"`
-//    Bids []string  `json:"bids"`
-//}
-//func (self *CFR_RestrictedApps) asText() string {
-//    text, _ := json.Marshal( self )
-//    return string(text)
-//}
-
-//func ( self *ControlFloor ) startVidStream( udid string ) {
-//    dev := self.DevTracker.getDevice( udid )
-//    dev.startVidStream()
-//}
-
-//func ( self *ControlFloor ) stopVidStream( udid string ) {
-//    dev := self.DevTracker.getDevice( udid )
-//    dev.stopVidStream()
-//}
-
 // Called from the device object
 func ( self *ControlFloor ) connectVidChannel( udid string ) *ws.Conn {
     dialer := ws.Dialer{
@@ -276,10 +212,8 @@ func ( self *ControlFloor ) openWebsocket() {
             case <- doneChan:
                 fmt.Println("Control Floor -> server, received message to terminate....")
                 break LOOP
-//            case resp := <- respondChan:
             case cfresponse := <- self.ToServerCFResponseChan:
-//                rText := resp.asText()
-                bytes, _ := json.Marshal( cfresponse )
+                bytes, _ := cfresponse.JSONBytes()
                 err := conn.WriteMessage( ws.TextMessage, bytes )
                 if err != nil {
                     fmt.Printf("Error writing to server ws\n")
@@ -318,25 +252,21 @@ func ( self *ControlFloor ) openWebsocket() {
            fmt.Printf("Received non-text message, type: %v",t)
         }
 
-        var cfrequest CFRequest;
-        err = json.Unmarshal([]byte(msg),&cfrequest);
+        cfrequest, err := NewInternalCFRequestFromJSON(msg) 
         if err != nil {
             fmt.Printf("Error decoding cfrequest1.\n %v\n%s\n\n",err,msg)
             continue
         }
         deviceID := cfrequest.CFDeviceID
         action   := cfrequest.Action
-        if cfrequest.CFDeviceID == "" || cfrequest.CFServerRequestID == 0 || cfrequest.Action =="" {
-            if cfrequest.Action == "ping" && cfrequest.CFDeviceID==""{
-                self.ToServerCFResponseChan <- *NewPongResponse(cfrequest)
-                fmt.Printf("Reply to server ping: pong\n")
-            }else{
-                fmt.Printf("Dropping message with no return address %s\n",msg)
-            }
+        if cfrequest.Action == "ping" && cfrequest.CFDeviceID==""{
+            self.ToServerCFResponseChan <- NewPongResponse(cfrequest)
+            fmt.Printf("Reply to server ping: pong\n")
+        }else if(cfrequest.Action == ""){
+            fmt.Printf("Dropping message with no action specified %s\n",msg)
             continue //TODO: error reply
-        }
-        if action == "shutdown" {
-            self.ToServerCFResponseChan <- *NewOkResponse(cfrequest)
+        }else if action == "shutdown" {
+            self.ToServerCFResponseChan <- NewOkResponse(cfrequest)
             do_shutdown( self.config, self.DevTracker )
         }else{
             //TODO: make controlfloor single-device?
@@ -425,7 +355,7 @@ func (self *ControlFloor) orientationChange( udid string, orientation string ) {
          "udid": censorUuid( udid ),
       } ).Info( fmt.Sprintf("Notifying CF of Orientation Change %s", orientation) )
      
-      self.ToServerCFResponseChan <- *NewOrientationChangedNotice(udid,orientation)
+      self.ToServerCFResponseChan <- NewOrientationChangedNotice(udid,orientation)
 //    ok := self.checkLogin()
 //    if ok == false {
 //        panic("Could not login when notifying of orientation change to '" + orientation + "' notify")

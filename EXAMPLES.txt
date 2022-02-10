@@ -3,26 +3,39 @@ When running
 
 you can send commands directly to the device at the console.  Some samples:
 
-{"action":"ping","tag":"reply"}
+{"action":"ping","tag":{"a":1,"b":2}}
 {"action":"noop","tag":"reply"}
 
-{"action":"tap","x":55,"y":135}
+{"action":"tap","args":{"x":55,"y":135}}
 {"action":"getOrientation"}
 
-{"action":"typeSpecialKey","key":"ArrowLeft"}
+{"action":"typeSpecialKey","args":{"key":"ArrowLeft"}}
 {"action":"getAlertInfo"}
 
 {"action":"startBroadcastApp"}  //this crashes 
 
 
-{"action":"getApplicationStructure", "elementSearchOrder":"system","processId":"-1","elementId":"Allow Once"}
+{"action":"getApplicationStructure", "args":{"elementSearchOrder":"system","processId":"-1","elementId":"Allow Once"}}
+
+{"action":"getApplicationStructure", "elementSearchOrder":"system","processId":"-1"}
+
+
+ITEMS BELOW THIS LINE NOT FIXED FOR MESSAGE RESTRUCTURING
+
+all arguments belong under args{} key.
+
+
+
+
+
 
 
 {"action":"tap","elementId":"Accessibility Shortcuts","elementType":"button","elementSearchPath":"system","timeout":0.000000,"cfprid":21,"cfpack":1}
 {"action":"getApplicationStructure", "elementSearchOrder":"system","processId":"-1"}
 
 {"action":"launchApplication", "bundleId":"com.apple.mobilenotes"}
-{"action":"typeText", "text":"Hello World"}
+{"action":"typeText", "args":{"text":"Hello World", "tag":"This is a tag\"\\{}{test:\"}"}}
+{"action":"typeText", "text":"This is a tag\"\\\{\}{test:\"}"}
 {"action":"getRestrictedApplications"}
 {"action":"restrictApplication", "bundleId":"com.apple.mobilenotes"}
 {"action":"allowApplication", "bundleId":"com.apple.mobilenotes"}

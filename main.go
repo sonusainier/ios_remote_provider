@@ -13,7 +13,6 @@ import (
     "syscall"
     "time"
     "io/ioutil"
-    "encoding/json"
     log "github.com/sirupsen/logrus"
     uc "github.com/nanoscopic/uclop/mod"
     "github.com/danielpaulus/go-ios/ios"
@@ -70,8 +69,8 @@ func main() {
     uclop.AddCmd( "activeApps","Get pids of active apps",          runActiveApps, idOpt )
 //    uclop.AddCmd( "toLauncher","Return to launcher screen",        runToLauncher, idOpt )
     uclop.AddCmd( "alertinfo", "Get alert info",                   runAlertInfo,  idOpt )
-    uclop.AddCmd( "islocked",  "Check if device screen is locked", runIsLocked,   idOpt )
-    uclop.AddCmd( "unlock",    "Unlock device screen",             runUnlock,     idOpt )
+//    uclop.AddCmd( "islocked",  "Check if device screen is locked", runIsLocked,   idOpt )
+//    uclop.AddCmd( "unlock",    "Unlock device screen",             runUnlock,     idOpt )
     uclop.AddCmd( "listen",    "Test listening for devices",       runListen,     commonOpts )
     uclop.AddCmd( "ping",      "Ping device",                      runPing,       idOpt )
     
@@ -84,32 +83,20 @@ func main() {
 //    uclop.AddCmd( "longTouchEl", "Long touch a named element", runLongTouchEl, clickButtonOpts )
     uclop.AddCmd( "addRec", "Add Recording to Control Center", runAddRec, idOpt )
     
-    appAtOpts := append( idOpt,
-        uc.OPT("-x","X",0),
-        uc.OPT("-y","Y",0),
-    )
-    uclop.AddCmd( "appAt", "App at point", runAppAtPoint, appAtOpts )
-    
     runAppOpts := append( idOpt,
         uc.OPT("-name","App name",uc.REQ),
     )
     uclop.AddCmd( "runapp", "Run named app", runRunApp, runAppOpts )
     
-    siriOpts := append( idOpt,
-        uc.OPT("-cmd","Siri command text",uc.REQ),
-    )
-    uclop.AddCmd( "siri", "Run siri", runSiri, siriOpts )
+//    siriOpts := append( idOpt,
+//        uc.OPT("-cmd","Siri command text",uc.REQ),
+//    )
+//    uclop.AddCmd( "siri", "Run siri", runSiri, siriOpts )
     
 //    elByPidOpts := append( idOpt,
 //        uc.OPT("-pid","PID",uc.REQ),
 //    )
 //    uclop.AddCmd( "elByPid", "Get source of pid", runElByPid, elByPidOpts )
-    
-    pidChildWithWidthOpts := append( idOpt,
-        uc.OPT("-pid","PID",uc.REQ),
-        uc.OPT("-width","With",uc.REQ),
-    )
-    uclop.AddCmd( "pidChildWithWidth", "Get element that is a child of pid with specified width", runPidChildWithWidth, pidChildWithWidthOpts )
     
     uclop.AddCmd( "vidtest", "Test backup video", runVidTest, idOpt ) 
     
@@ -466,7 +453,7 @@ func runSource( cmd *uc.Cmd ) {
         pid, _ = strconv.Atoi( pidStr ) 
     }
     cfaWrapped( cmd, "", func( cfa *CFA, dev *Device ) {
-        xml := cfa.Source(bi,pid)
+        xml := cfa.Source(bi,pid,false)
         fmt.Println( xml )
     } )
 }
@@ -582,8 +569,9 @@ func runInteractive( cmd *uc.Cmd ) {
         reader := bufio.NewReader(os.Stdin)
         //dev.startup()
         for{
-            var cfrequest CFRequest
+  //          var cfrequest CFRequest
             dev := devTracker.getDevice("c7ba9ff8f4b3659d3e95c6beb93b209c74233319")
+//            dev := devTracker.getDevice("a9686ebb84a0091436333f5d52d4adc4181e9b07")
             if dev == nil{
                 fmt.Println("Waiting for device to exist")
                 time.Sleep( time.Millisecond * 1000 )
@@ -603,7 +591,7 @@ func runInteractive( cmd *uc.Cmd ) {
             if text == ""{
                 continue
             }
-            error := json.Unmarshal([]byte(text), &cfrequest)
+            cfrequest , error := NewExternalCFRequestFromJSON([]byte(text))
             if error != nil{ 
                 fmt.Println("Interactive JSON error: %v\n",error)
             }else{
@@ -619,40 +607,34 @@ func runInteractive( cmd *uc.Cmd ) {
 }
 func runRawJson( cmd *uc.Cmd ) {
     filename := cmd.Get("-file")
-    action := cmd.Get("-action").String()
-    bundleId := cmd.Get("-bundleId").String()
-    text := cmd.Get("-text").String()
-    x := cmd.Get("-x").String()
-    y := cmd.Get("-y").String()
+//    action := cmd.Get("-action").String()
+//    bundleId := cmd.Get("-bundleId").String()
+//    text := cmd.Get("-text").String()
+//    x := cmd.Get("-x").String()
+//    y := cmd.Get("-y").String()
     cfaWrapped( cmd, "", func( cfa *CFA, dev *Device ) {
-        var cfrequest CFRequest
+        var cfrequest *CFRequest
         if filename != nil && filename.String() != ""{
-            file, error := ioutil.ReadFile(filename.String())
+            data, error := ioutil.ReadFile(filename.String())
             if(error != nil){
                 fmt.Println("%v",error)
                 return
             }
-            error = json.Unmarshal([]byte(file), &cfrequest)
+            cfrequest,error = NewExternalCFRequestFromJSON([]byte(data))
             if(error != nil){
                 fmt.Println("%v",error)
                 return
             }
-        }else if(action!=""){
-            cfrequest = CFRequest{Action:action,Text:text,X:json.Number(x),Y:json.Number(y),BundleID:bundleId}
         }else{
-            fmt.Println("must specify either -file or -action")
+            fmt.Println("must specify -file")
         }
-        cfresponse := cfa.SendCFRequestAndWait(&cfrequest)
-        a , _  :=  json.Marshal(cfrequest)
-        fmt.Println( string(a) )
-        value:= cfresponse.Value
-        cfresponse.Value= ""
-        a , _  = json.Marshal(cfresponse)
+        cfresponse := cfa.SendCFRequestAndWait(cfrequest)
+        value:= string(cfresponse.RawValue)
         if value=="" {
         }else if value[0]=='{' {
             //TODO: properly unescape JSON in a generic way and print...
-            //value = strings.Replace(value,"\\n","\n",-1)
-            //value = strings.Replace(value,"\\\"","\"",-1)
+            value = strings.Replace(value,"\\n","\n",-1)
+            value = strings.Replace(value,"\\\"","\"",-1)
             fmt.Println("Value: %s",value)
         }else{
             fmt.Println("Value: %s",value)
@@ -660,46 +642,6 @@ func runRawJson( cmd *uc.Cmd ) {
     })
 }
 
-
-func runSiri( cmd *uc.Cmd ) {
-    cmdT := cmd.Get("-cmd").String()
-    cfaWrapped( cmd, "", func( cfa *CFA, dev *Device ) {
-        cfa.Siri(cmdT)
-    } )
-}
-
-//func runToLauncher( cmd *uc.Cmd ) {
-//    cfaWrapped( cmd, "", func( cfa *CFA, dev *Device ) {
-//        cfa.ToLauncher()
-//    } )
-//}
-
-//func runElByPid( cmd *uc.Cmd ) {
-//    pid := cmd.Get("-pid").Int()
-//    cfaWrapped( cmd, "", func( cfa *CFA, dev *Device ) {
-//        source := cfa.ElByPid(pid,true)
-//        fmt.Println(source)
-//    } )
-//}
-
-func runPidChildWithWidth( cmd *uc.Cmd ) {
-    pid := cmd.Get("-pid").Int()
-    width := cmd.Get("-width").Int()
-    
-    cfaWrapped( cmd, "", func( cfa *CFA, dev *Device ) {
-        source := cfa.PidChildWithWidth(pid,width)
-        fmt.Println(source)
-    } )
-}
-
-func runAppAtPoint( cmd *uc.Cmd ) {
-    x := cmd.Get("-x").Int()
-    y := cmd.Get("-y").Int()
-    cfaWrapped( cmd, "", func( cfa *CFA, dev *Device ) {
-        app := cfa.AppAtPoint(x,y,true,false,true)
-        fmt.Println( app )
-    } )
-}
 
 func runWifiMac( cmd *uc.Cmd ) {
     cfaWrapped( cmd, "", func( cfa *CFA, dev *Device ) {
@@ -731,17 +673,6 @@ func runAt( cmd *uc.Cmd ) {
     } )
 }
 
-func runIsLocked( cmd *uc.Cmd ) {
-    cfaWrapped( cmd, "", func( cfa *CFA, dev *Device ) {
-        locked := cfa.IsLocked()
-        if locked {
-            fmt.Println("Device screen is locked")
-        } else {
-            fmt.Println("Device screen is unlocked")
-        }
-    } )
-}
-
 func runPing( cmd *uc.Cmd ) {
     cfaWrapped( cmd, "", func( cfa *CFA, dev *Device ) {
         for {
@@ -751,16 +682,6 @@ func runPing( cmd *uc.Cmd ) {
             fmt.Printf("Elapsed ping time %v\n",elapsed)
             time.Sleep( time.Second * 1 )
         }
-    } )
-}
-
-func runUnlock( cmd *uc.Cmd ) {
-    cfaWrapped( cmd, "", func( cfa *CFA, dev *Device ) {
-        //cfa.Unlock()
-        cfa.ioHid( 0x0c, 0x30 ) // power
-        //time.Sleep(time.Second)
-        //cfa.ioHid( 0x07, 0x4a ) // home keyboard button
-        cfa.Unlock()
     } )
 }
 

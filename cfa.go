@@ -2,7 +2,6 @@ package main
 
 import (
     "fmt"
-    "strconv"
     "net/http"
     "encoding/json"
     "strings"
@@ -41,7 +40,7 @@ type CFA struct {
     //disableUpdate bool
     keyActive     bool
     keyLock       *sync.Mutex
-    sequenceNumber int32
+    sequenceNumber int
     //Note: this belongs here, not device.go, but it needs to be instantiated with the device... 
     //FromAgentCFResponseChan  chan CFResponse //messages from device nng socket, directed to this device
 }
@@ -232,11 +231,9 @@ func (self *CFA) startCFResponseListener(){
                 time.Sleep( time.Second * 2 )
                 continue
             }
-            bytes:=msg.Body
-            var cfresponse CFResponse;
-            err = json.Unmarshal(bytes,&cfresponse);
+            cfresponse,err := NewCFResponseFromJSON(msg.Body)
             if err != nil {
-                fmt.Printf("Error decoding cfresponse %v\n\n%s\n\n",err,string(bytes))
+                fmt.Printf("Error decoding cfresponse %v\n\n%s\n\n",err,string(msg.Body))
 //                    time.Sleep( time.Second * 2 ) 
                 continue
             }
@@ -510,58 +507,23 @@ func ( self *CFA ) launchApplication( bundleID string ) (errorstr string){
         } ).Debug("CFA launching app")
     }
     
-    cfresponse := self.SendCFRequestAndWait(NewLaunchApplicationRequest(bundleID))
-    if cfresponse.Error!=""{
+    cfresponse := self.SendCFRequestAndWait(NewCFRequest(CFLaunchApplication,Application{BundleID:bundleID})) //self.SendCFRequestAndWait(NewLaunchApplicationRequest(bundleID))
+    if cfresponse.Error != ""{
         log.Error("Failed to launch application ",bundleID,cfresponse.Error)
     }
-    return cfresponse.Error 
-
-//    self.disableUpdate = true
-//    
-//    json := fmt.Sprintf( `{
-//        action: "launchApp"
-//        bundleId: "%s"
-//    }`, bundle )
-//        
-//    err := self.nngSocket.Send([]byte(json))
-//    if err != nil {
-//        fmt.Printf("Send error: %s\n", err )
-//    }
-//    
-//    _, err = self.nngSocket.Recv()
-//    if err != nil {
-//        fmt.Printf( "launchApp err: %s\n", err )
-//    }  
-//    
-//    self.disableUpdate = false
-}
-
-func (self *CFA) clickAt( x int, y int ) {
-    json := fmt.Sprintf( `{
-        action: "tap"
-        x:%d
-        y:%d
-    }`, x, y )
-    
-    self.nngSocket.Send([]byte(json))
-    self.nngSocket.Recv()
+    return ""
 }
 
 func (self *CFA) SendCFRequest( cfrequest *CFRequest ) {
     cfrequest.CFProviderRequestID = self.sequenceNumber
     fmt.Printf("Action: %s",cfrequest.Action) 
-    fmt.Printf("X1: %s",cfrequest.X1) 
-    fmt.Printf("Y1: %s",cfrequest.Y2) 
-    fmt.Printf("X2: %s",cfrequest.X2) 
-    fmt.Printf("Y2: %s",cfrequest.Y2) 
-    fmt.Printf("Duration: %s",cfrequest.Duration) 
     self.sequenceNumber++
-    jsonBytes, err := json.Marshal( *cfrequest )
+    jsonBytes, err := cfrequest.JSONBytes()
     if self.nngSocket == nil{
         log.Error("No socket?")
     }
     if err!= nil{
-        log.Error("SendCFRequest JSON Marshall Error: ",err)
+        log.Error("SendCFRequest JSON Error: ",err)
     }
     log.Info("Sending request ",cfrequest.Action)
     log.Info("Sending data: ",string(jsonBytes))
@@ -574,7 +536,7 @@ func (self *CFA) SendCFRequest( cfrequest *CFRequest ) {
 // response we expect.
 // Note: do not call this function unless you are 100% guaranteed a response
 // otherwise this will hang.  TODO: timeout?
-func (self *CFA) GetCFResponse( cfrequest *CFRequest) CFResponse  {
+func (self *CFA) GetCFResponse( cfrequest *CFRequest) *CFResponse  {
     for{
 fmt.Println("Waiting for response")
         cfresponse := <- self.dev.FromAgentCFResponseChan
@@ -586,112 +548,33 @@ fmt.Println("Returning response")
 fmt.Println("Default response handler")
         self.dev.defaultResponseHandler(cfresponse)
         //absolutely should be impossible if client is behaving appropriately
-        if cfresponse.CFProviderRequestID > cfrequest.CFProviderRequestID{
-            return CFResponse{Action:cfrequest.Action,
-                              CFServerRequestID: cfrequest.CFServerRequestID,
-                              Tag: cfrequest.Tag,
-                              Status:"error",
-                              Error:"Did not receive response from device."}
+        if cfresponse.CFProviderRequestID > cfrequest.CFProviderRequestID {
+            return NewErrorResponse(cfrequest,fmt.Sprintf("Did not receive response from device. Waiting for sequence number %d, saw id %d"))
         }
     }
 }
 
 
-func (self *CFA) SendCFRequestAndWait( cfrequest *CFRequest ) (cfresponse CFResponse){
-    cfrequest.CFProviderRequiresAck = 1
+func (self *CFA) SendCFRequestAndWait( cfrequest *CFRequest ) (*CFResponse){
+    cfrequest.RequiresResponse=true
     self.SendCFRequest(cfrequest)
     return self.GetCFResponse(cfrequest)
 }
 
 func (self *CFA) ping( ) {
-//    json := `{ "action": "ping"}`;
-
-    cfping := CFRequest{Action:"ping"}
-//    cfnoop := CFRequest{Action:"noOp"}
-        self.SendCFRequest(&cfping);
+    cfping := NewCFRequest(CFPing,nil)
+        self.SendCFRequest(cfping);
     start := time.Now()
     for i := 1; i<500; i++{
-//        self.SendCFRequest(&cfnoop);
+//        self.SendCFRequest(cfnoop);
     }
-        self.GetCFResponse(&cfping);
-//    cfresponse:= self.dev.GetCFResponse(&cfrequest);
-//    self.dev.GetCFResponse(&cfrequest);
-
-//    self.nngSocket.Send([]byte(json))
-//    self.nngSocket.Recv()
+      self.GetCFResponse(cfping);
     elapsed:= time.Now().Sub(start)
     log.Info("Ping elapsed time: ",elapsed)
 }
 
-//func (self *CFA) doubleClickAt( x int, y int ) {
-//    json := fmt.Sprintf( `{
-//        action: "doubleTap"
-//        x:%d
-//        y:%d
-//    }`, x, y )
-//    
-//    self.nngSocket.Send([]byte(json))
-//    self.nngSocket.Recv()
-//}
-
-//func (self *CFA) mouseDown( x int, y int ) {
-//    json := fmt.Sprintf( `{
-//        action: "mouseDown"
-//        x:%d
-//        y:%d
-//    }`, x, y )
-//    
-//    self.nngSocket.Send([]byte(json))
-//    self.nngSocket.Recv()
-//}
-
-//func (self *CFA) mouseUp( x int, y int ) {
-//    json := fmt.Sprintf( `{
-//        action: "mouseUp"
-//        x:%d
-//        y:%d
-//    }`, x, y )
-//    
-//    self.nngSocket.Send([]byte(json))
-//    self.nngSocket.Recv()
-//}
-
-//func (self *CFA) hardPress( x int, y int ) {
-//    log.Info( "Firm Press:", x, y )
-//    json := fmt.Sprintf( `{
-//        action: "tapFirm"
-//        x:%d
-//        y:%d
-//        pressure:1
-//    }`, x, y )
-//    
-//    self.nngSocket.Send([]byte(json))
-//    self.nngSocket.Recv()
-//}
-
-//func (self *CFA) longPress( x int, y int, time float64 ) {
-//    log.Info( "Press for time:", x, y, time )
-//    json := fmt.Sprintf( `{
-//        action: "tapTime"
-//        x:%d
-//        y:%d
-//        time:%f
-//    }`, x, y, time )
-//    
-//    self.nngSocket.Send([]byte(json))
-//    self.nngSocket.Recv()
-//}
-
-func (self *CFA) home() bool {
-//    json := `{
-//      action: "button"
-//      name: "home"
-//    }`
-//    self.nngSocket.Send([]byte(json))
-//    self.nngSocket.Recv()
-//    
-//    return ""
-    return self.SendCFRequestAndWait(NewSimulateHomeButtonRequest()).Error==""
+func (self *CFA) home() string {
+    return self.SendCFRequestAndWait(NewCFRequest(CFSimulateHomeButton,nil)).Error
 }
 
 func (self *CFA) AT() (string) {
@@ -708,7 +591,7 @@ func (self *CFA) AT() (string) {
     return ""
 }
 
-func (self *CFA) keys( codes []int ) {
+func (self *CFA) keysXXX( codes []int ) {
     if len( codes ) > 1 {
         self.typeText( codes )
         return
@@ -815,114 +698,27 @@ func (self *CFA) text( text string ) {
         self.nngSocket.Recv()
     }
 }
-func (self *CFA) specialKey( code string ) {
-    //TODO: see typeText(), can/should we send special keys to the custom keyboard? 
-    msg := CfaSpecialKey {
-        Action: "typeSpecialkey",
-        Code: code,
-    }
-    bytes, _ := json.Marshal( msg )
-        
-    log.Info( "sending " + string(bytes) )
-          
-    self.nngSocket.Send(bytes)
-    self.nngSocket.Recv()
-}
 
 func ( self *CFA ) swipe( x1 float64, y1 float64, x2 float64, y2 float64, duration float64 ) {
     log.Info( "Swiping:", x1, y1, x2, y2, duration )
-    
-//    json := fmt.Sprintf( `{
-//        action: "swipe"
-//        x1:%d
-//        y1:%d
-//        x2:%d
-//        y2:%d
-//        duration:%.2f
-//    }`, x1, y1, x2, y2, duration )
-    self.SendCFRequestAndWait(NewSwipeRequest(x1,y1,x2,y2,duration))  
-//    self.nngSocket.Send([]byte(json))
-//    self.nngSocket.Recv()
+    self.SendCFRequestAndWait(NewCFRequest(CFSwipe,NewSimpleSwipe(x1,y1,x2,y2,duration)))  
 }
-
-func (self *CFA) ElClick( elId string ) {
-    log.Info( "elClick:", elId )
-    json := fmt.Sprintf( `{
-        action: "elClick"
-        id: "%s"
-    }`, elId )
-    
-    self.nngSocket.Send([]byte(json))
-    self.nngSocket.Recv()
-}
-
-func (self *CFA) ElForceTouch( elId string, pressure int ) {
-    log.Info( "elForceTouch:", elId, pressure )
-    json := fmt.Sprintf( `{
-        action: "elForceTouch"
-        id: "%s"
-        time: 2
-        pressure: %d
-    }`, elId, pressure )
-    
-    self.nngSocket.Send([]byte(json))
-    self.nngSocket.Recv()
-}
-
-func (self *CFA) ElLongTouch( elId string ) {
-    log.Info( "elTouchAndHold", elId )
-    json := fmt.Sprintf( `{
-        action: "elTouchAndHold"
-        id: "%s"
-        time: 2.0
-    }`, elId )
-    
-    self.nngSocket.Send([]byte(json))
-    self.nngSocket.Recv()
-}
-
-
-
-/*
-func (self *CFA) GetEl( elType string, elName string, wait float32 ) string {
-    log.Info( "getEl:", elName )
-    
-    waitLine := ""
-    if wait > 0 {
-        waitLine = fmt.Sprintf("wait:%f",wait)
-    }
-    
-    json := fmt.Sprintf( `{
-        action: "getEl"
-        type: "%s"
-        id: "%s"
-        %s
-    }`, elType, elName, waitLine )
-    
-    self.nngSocket.Send([]byte(json))
-    idBytes, _ := self.nngSocket.Recv()
-    
-    log.Info( "getEl-result:", string(idBytes) )
-    
-    return string( idBytes )
-}
-*/
 
 func (self *CFA) hasElement( elementType string, elementID string, searchPath string, timeout float64 ) (bool){
-    cfresponse := self.SendCFRequestAndWait(&CFRequest{Action:"getElement",ElementType:elementType,ElementID:elementID,ElementSearchPath:searchPath,Timeout:json.Number(fmt.Sprintf("%f",timeout))})
-    return cfresponse.Error==""
+    cfresponse := self.SendCFRequestAndWait(NewCFRequest(CFGetElement,ElementSearch{Type:elementType,ID:elementID,SearchPath:searchPath,Timeout:timeout}))
+    return cfresponse.Status!="error"
 }
 func (self *CFA) tapElement( elementType string, elementID string, searchPath string, timeout float64 ) (bool){
-    cfresponse := self.SendCFRequestAndWait(NewTapElementRequest(elementType,elementID,searchPath,timeout))
-    return cfresponse.Error==""
+    cfresponse := self.SendCFRequestAndWait(NewCFRequest(CFTap,ElementSearch{Type:elementType,ID:elementID,SearchPath:searchPath,Timeout:timeout}))
+    return cfresponse.Status!="error"
 }
 func (self *CFA) tapAndHoldElement( elementType string, elementID string, searchPath string, timeout float64 ) (bool){
-    cfresponse := self.SendCFRequestAndWait(NewTapAndHoldElementRequest(elementType,elementID,searchPath,timeout))
-    return cfresponse.Error==""
+    cfresponse := self.SendCFRequestAndWait(NewCFRequest(CFTapAndHold,ElementSearch{Type:elementType,ID:elementID,SearchPath:searchPath,Timeout:timeout}))
+    return cfresponse.Status!="error"
 }
 
 
-func (self *CFA) SysElPos( elType string, elName string ) (float32,float32) {
+func (self *CFA) SysElPosXXX( elType string, elName string ) (float32,float32) {
     log.Info( "sysElPos:", elName )
     
     json := fmt.Sprintf( `{
@@ -942,7 +738,7 @@ func (self *CFA) SysElPos( elType string, elName string ) (float32,float32) {
     return x,y
 }
 
-func (self *CFA) Notice(r CFResponse){
+func (self *CFA) Notice(r *CFResponse){
     r.CFDeviceID = self.udid
     if self.dev.cf != nil{
         self.dev.cf.ToServerCFResponseChan <- r
@@ -952,41 +748,50 @@ func (self *CFA) Notice(r CFResponse){
 func (self *CFA) DismissAlerts() string {
     var previousAlert IOSAlert
     for{
-        cfresponse := self.SendCFRequestAndWait(&CFRequest{Action:"getAlertInfo"})
+        var currentAlert IOSAlert
+        cfresponse := self.SendCFRequestAndWait(NewCFRequest(CFGetAlert,nil))
         if cfresponse.Error != ""{
-            return "Error calling getAlertInfo: "+cfresponse.Error
+            return "Error calling getAlert: "+cfresponse.Error
         }
-        if cfresponse.Value==""{
+        if !cfresponse.HasValue(){
             if previousAlert.Title!=""{
-                self.Notice(*NewAlertDismissedNotice(self.udid,previousAlert.Title,previousAlert.Buttons[0].Description))
+                self.Notice(NewAlertDismissedNotice(self.udid,previousAlert.Title,previousAlert.Buttons[0].Description))
             }
             return ""
         }
-        currentAlert,err := NewIOSAlertFromJSONString(cfresponse.Value)
+fmt.Println("XXXX4")
+        err := cfresponse.GetValue(&currentAlert)
         if err != nil{
+fmt.Println("XXXX4"+string(cfresponse.RawValue))
+fmt.Println("XXXX4"+err.Error())
             return err.Error()
         } 
+fmt.Println("XXXX5")
 
         if(previousAlert.Title != ""){
             if(previousAlert.Title == currentAlert.Title && previousAlert.Description == currentAlert.Description){
                 return "Failed to dismiss alert "+currentAlert.Title
             }
         }
+fmt.Println("XXXX6")
 
         if(len(currentAlert.Buttons)>0){
 
             //TODO: only consider explicitly specified alerts
 	    //alerts := self.config.vidAlerts
+fmt.Println("XXXX7")
 
             button := currentAlert.Buttons[0]
             fmt.Printf("Dismissing alert \"%s\" by tapping \"%s\"",currentAlert.Title,button.Description)
-            cfresponse = self.SendCFRequestAndWait(&CFRequest{Action:"tap",X:button.CenterX,Y:button.CenterY})
-            if cfresponse.Error != ""{
+            cfresponse = self.SendCFRequestAndWait(NewCFRequest(CFTap,Point{button.CenterX,button.CenterY}))
+            if cfresponse.Status == "error"{
                 return "Error tapping button " + button.Description
             }
         }else{
+fmt.Println("XXXX8")
             return "Alert "+currentAlert.Title+" has no buttons"
         }
+fmt.Println("XXXX9")
         previousAlert = currentAlert
         time.Sleep( time.Second * 1 )
     }
@@ -994,36 +799,18 @@ func (self *CFA) DismissAlerts() string {
 
 func (self *CFA) GetWindowSize() (float64,float64) {
     log.Info("GetWindowSize")
-    cfresponse := self.SendCFRequestAndWait(NewGetWindowSizeRequest())
+    cfresponse := self.SendCFRequestAndWait(NewCFRequest(CFGetWindowSize,nil))
     log.Info("windowSize Response")
     fmt.Printf("%v",cfresponse)
     if(cfresponse.Status=="ok"){
-        fmt.Println("Response was ok!")
-        fmt.Println(cfresponse.Value)
-        r, _ := NewRectangleFromJSONString(cfresponse.Value)
+        var r Rectangle
+        cfresponse.GetValue(&r)
         log.Info("windowSize-result:",r.Width,r.Height)
         return r.Width,r.Height
     }
     return 0,0
 } 
-/*
-func (self *CFA) ElPos(id string) (int,int,int,int) {
-    json := fmt.Sprintf( `{
-        action: "elPos"
-        id: "%s"
-    }`, id )
-    self.nngSocket.Send([]byte(json))
-    posJson, _ := self.nngSocket.Recv()
-    
-    root, _, _ := uj.ParseFull( posJson )
-    w := root.Get("w").Int()
-    h := root.Get("h").Int()
-    x := root.Get("x").Int()
-    y := root.Get("y").Int()
-    
-    return x,y,w,h
-}
-*/
+
 func (self *CFA) AlertInfo() ( uj.JNode, string ) {
     self.nngSocket.Send([]byte(`{ action: "alertInfo" }`))
     jsonBytes, _ := self.nngSocket.Recv()
@@ -1047,23 +834,21 @@ func (self *CFA) WifiIp() string {
 }
 
 func (self *CFA) ActiveApps() string {
-    //self.nngSocket.Send([]byte(`{ action: "activeApps" }`))
-    //srcBytes, _ := self.nngSocket.Recv()
-    //
-    //return string(srcBytes)
-    cfresult := self.SendCFRequestAndWait(&CFRequest{Action:"getActiveApplicationPids"})
-    return cfresult.Value
+    cfresult := self.SendCFRequestAndWait(NewCFRequest(CFGetActiveApplicationPids,nil))
+    return cfresult.StringValue()
 }
 
-func (self *CFA) SourceJson(bundleID string, pid int) string {
-    cfresult := self.SendCFRequestAndWait(&CFRequest{Action:"getSourceJson",BundleID:bundleID,ProcessID:json.Number(strconv.Itoa(pid))})
-    return cfresult.Value
+func (self *CFA) Source(bundleID string, pid int, json bool) string {
+    action := CFGetSource
+    if json{
+        action = CFGetSourceJSON
+    }
+    if(pid>0){ //these options are mutually exclusive
+        return self.SendCFRequestAndWait(NewCFRequest(action,Process{ProcessID:pid})).StringValue()
+    }else{
+        return self.SendCFRequestAndWait(NewCFRequest(action,Application{BundleID:bundleID})).StringValue()
+    }
 }
-func (self *CFA) Source(bundleID string, pid int) string {
-    cfresult := self.SendCFRequestAndWait(&CFRequest{Action:"getSourceJson",BundleID:bundleID,ProcessID:json.Number(strconv.Itoa(pid))})
-    return cfresult.Value
-}
-
 
 func (self *CFA) Screenshot() []byte {
     if self.nngSocket2 == nil {
@@ -1074,63 +859,6 @@ func (self *CFA) Screenshot() []byte {
     imgBytes, _ := self.nngSocket2.Recv()
     
     return imgBytes
-}
-
-func (self *CFA) Siri(text string) {
-    self.nngSocket.Send([]byte(fmt.Sprintf(`{ action: "siri", text: "%s" }`, text)))
-    self.nngSocket.Recv()
-}
-
-//func (self *CFA) ElByPid(pid int,json bool) string {
-//    if json {
-//        self.nngSocket.Send([]byte(fmt.Sprintf(`{ action: "elByPid", pid: %d, json: 1 }`, pid)))
-//    } else {
-//        self.nngSocket.Send([]byte(fmt.Sprintf(`{ action: "elByPid", pid: %d }`, pid)))
-//    }
-///    srcBytes, _ := self.nngSocket.Recv()
-//    
-//    return string(srcBytes)
-//}
-
-func (self *CFA) PidChildWithWidth(pid int,width int) string {
-    self.nngSocket.Send([]byte(fmt.Sprintf(`{ action: "pidChildWithWidth", pid: %d, width: %d }`, pid, width)))
-    srcBytes, _ := self.nngSocket.Recv()
-    
-    return string(srcBytes)
-}
-
-func (self *CFA) AppAtPoint( x int, y int, asjson bool, nopid bool, top bool ) string {
-    jsonLine := ""
-    if asjson { jsonLine = "json: 1" }
-    pidLine := ""
-    if nopid { pidLine = "nopid: 1" }
-    topLine := ""
-    if top { topLine = "top: 1" }
-    json := fmt.Sprintf( `{
-        action: "elementAtPoint"
-        x: %d
-        y: %d
-        %s
-        %s
-        %s
-    }`, x, y, jsonLine, pidLine, topLine )
-    self.nngSocket.Send([]byte(json))
-    srcBytes, _ := self.nngSocket.Recv()
-    
-    return string(srcBytes)
-}
-
-func (self *CFA) IsLocked() bool {
-    self.nngSocket.Send([]byte(`{ action: "isLocked" }`))
-    jsonBytes, _ := self.nngSocket.Recv()
-    root, _, _ := uj.ParseFull( jsonBytes )
-    return root.Get("locked").Bool()
-}
-
-func (self *CFA) Unlock () {
-    self.nngSocket.Send([]byte(`{ action: "unlock" }`))
-    res, _ := self.nngSocket.Recv()
-    fmt.Printf("Result:%s\n", string( res ) )
 }
 
 func (self *CFA) ShowControlCenter() {
@@ -1281,21 +1009,11 @@ func (self *CFA) StartBroadcastStream( appName string, bid string, devConfig *CD
     } else if method == "manual" {
     }
     
-    self.SendCFRequest(&CFRequest{Action:"showApplicationLauncher"})    
+    self.SendCFRequest(NewCFRequest(CFShowApplicationLauncher,nil))
     time.Sleep( time.Second * 5 )
     return ""
 }
 
-func (self *CFA) AppChanged( bundleId string ) {
-//    if self.disableUpdate { return }
-    self.SendCFRequest(&CFRequest{Action:"updateApplication",BundleID:bundleId})    
-//    json := fmt.Sprintf( `{
-//        action: "updateApplication"
-//        bundleId: "%s"
-//    }`, bundleId )
-    
-//    if self.nngSocket != nil {
-//        self.nngSocket.Send([]byte(json))
-//        self.nngSocket.Recv()
-//    }
+func (self *CFA) AppChanged( bundleID string ) {
+    self.SendCFRequest(NewCFRequest(CFUpdateApplication,Application{BundleID:bundleID}))
 }

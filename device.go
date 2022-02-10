@@ -2,7 +2,6 @@ package main
 
 import (
     "fmt"
-    "encoding/json"
     "strings"
     "strconv"
     "sync"
@@ -62,8 +61,8 @@ type Device struct {
     process         map[string] *GenericProc
     owner           string
     connected       bool
-    CFRequestChan   chan CFRequest  //messages from server, directed to this device.  See also: CFResponseChan in cfa.go
-    FromAgentCFResponseChan  chan CFResponse
+    CFRequestChan   chan *CFRequest  //messages from server, directed to this device.  See also: CFResponseChan in cfa.go
+    FromAgentCFResponseChan  chan *CFResponse
     EventCh         chan DevEvent
     BackupCh        chan BackupEvent     
     CFAFrameCh      chan BackupEvent
@@ -110,8 +109,8 @@ func NewDevice( config *Config, devTracker *DeviceTracker, udid string, bdev Bri
         process:         make( map[string] *GenericProc ),
         cf:              devTracker.cf,
         EventCh:         make( chan DevEvent ),
-        CFRequestChan:   make( chan CFRequest, 100 ), //There is only one consumer, but we allow messages to be queued while processing
-        FromAgentCFResponseChan:  make( chan CFResponse, 100 ),
+        CFRequestChan:   make( chan *CFRequest, 100 ), //There is only one consumer, but we allow messages to be queued while processing
+        FromAgentCFResponseChan:  make( chan *CFResponse, 100 ),
         BackupCh:        make( chan BackupEvent ),
         CFAFrameCh:      make( chan BackupEvent ),
         bridge:          bdev,
@@ -265,6 +264,12 @@ func (self *Device) startEventLoop() {
             select {
             case cfrequest := <- self.CFRequestChan:
                 action := cfrequest.Action
+                var application Application
+                //not perfect, but most of them....
+                if strings.Contains(action,"Application"){
+                    cfrequest.GetArgs(&application)
+                }
+
                 log.Info("Device.go: request received ",action) 
                 //TODO: particular actions to look out for?
                 fmt.Printf("XX %s\n",action) 
@@ -296,28 +301,28 @@ func (self *Device) startEventLoop() {
 //                    ip := dev.WifiIp()
 //                    mac := dev.WifiMac()
                 } else if action == "killApplication" {
-                    errorstr = self.killApplication( cfrequest.BundleID )
+                    errorstr = self.killApplication( application.BundleID )
                 } else if action == "launchApplication" || action == "launch" {
-                    errorstr = self.launchApplication( cfrequest.BundleID )
+                    errorstr = self.launchApplication( application.BundleID )
                 } else if action == "allowApplication" || action == "allowApp" {
-                    errorstr = self.allowApplication( cfrequest.BundleID )
+                    errorstr = self.allowApplication( application.BundleID )
                 } else if action == "restrictApplication" || action == "restrictApp" {
-                    errorstr = self.restrictApplication( cfrequest.BundleID )
+                    errorstr = self.restrictApplication( application.BundleID )
                 } else if action == "getRestrictedApplications" || action =="listRestrictedApps" {
-                    self.cf.ToServerCFResponseChan <- *NewOkValueResponse(cfrequest,self.restrictedApps)
+                    self.cf.ToServerCFResponseChan <- NewOkValueResponse(cfrequest,self.restrictedApps)
                     handled = true
                 } else if action == "initWebrtc" {
                     self.initWebrtc(cfrequest)
                     handled = true
                 }else{
                     handled = true
-                    self.cfa.SendCFRequest(&cfrequest)
+                    self.cfa.SendCFRequest(cfrequest)
                 }
                 if !handled{ //TODO: we don't need to reply to all of these requests either...
                     if errorstr != "" {
-                        self.cf.ToServerCFResponseChan <- *NewErrorResponse(cfrequest,errorstr)
+                        self.cf.ToServerCFResponseChan <- NewErrorResponse(cfrequest,errorstr)
                     }else{
-                        self.cf.ToServerCFResponseChan <- *NewOkResponse(cfrequest)
+                        self.cf.ToServerCFResponseChan <- NewOkResponse(cfrequest)
                     }
                 }
 
@@ -778,7 +783,7 @@ func (self *Device) justStartBroadcast() {
     self.cfa.StartBroadcastStream( self.config.vidAppName, bid, self.devConfig )
 }
 
-func (self *Device) startVideoStream(cfrequest CFRequest) ( errorstr string) {
+func (self *Device) startVideoStream(cfrequest *CFRequest) ( errorstr string) {
     conn := self.cf.connectVidChannel( self.udid )
     
     imgData := self.cfa.Screenshot()
@@ -812,7 +817,7 @@ func (self *Device) startVideoStream(cfrequest CFRequest) ( errorstr string) {
     
     if self.vidStreamer != nil {
         self.vidStreamer.setImageConsumer( imgConsumer )
-        fmt.Printf("Telling video stream to start\n")
+        fmt.Printf("Telling video stream to start1\n")
         controlChan <- 1 // start
     }
     return ""
@@ -878,28 +883,21 @@ func (self *Device) adaptToRotation( x int, y int ) (int,int) {
 
 // Called from two places.
 //    1. device default event_loop
-//    2. 
+//    2. cfa.GetCFResponse 
 // called principally from the event loop. 
 // this is the device's chance to do something
 // with a response, before forwarding back to ControlFloor where it will get sent back
 // to any listening client.
 //
-func (self *Device) defaultResponseHandler ( cfresponse CFResponse ){
+func (self *Device) defaultResponseHandler ( cfresponse *CFResponse ){
     //TODO: Put any logging here.
-    log.Info("Received response! ",cfresponse.Action,cfresponse.Status)
+    log.Info("Received response! ",cfresponse.MessageType,cfresponse.Status)
     if self.cf!=nil && cfresponse.CFServerRequestID != 0{
-        //If the request was initiated elsewhere, then the response will be sent back based on the conditions below
-        if cfresponse.Error != "error" || cfresponse.Tag != "" || 
-           cfresponse.Value !=""       || cfresponse.CFServerRequiresAck > 0  || 
-           cfresponse.Action =="ping"  || strings.HasPrefix(cfresponse.Action,"get")  {
-
-            self.cf.ToServerCFResponseChan <- cfresponse
-
-        }
+        self.cf.ToServerCFResponseChan <- cfresponse
     }else{
        log.Info("Message not routeable to server: " )
-       bytes , _ := json.Marshal(cfresponse)
-       fmt.Println(string(bytes))
+       jsonBytes,_ := cfresponse.JSONBytes()
+       fmt.Println(string(jsonBytes))
     }
 }
 
@@ -950,7 +948,7 @@ func findNodeWithAtt( cur uj.JNode, att string, label string ) uj.JNode {
 }
 
 // Assumes AssistiveTouch is enabled already
-func (self *Device) showAssistiveTouchMenu( pid int32 ) string {
+func (self *Device) showAssistiveTouchMenu( pid int ) string {
 log.Warn("10 %v",pid)
 //    y := 0
     i := 0
@@ -962,12 +960,10 @@ log.Warn("11")
 //            return 0
         }
 log.Warn("12")
-//        cfrequest := NewTapElementRequest("label","AssistiveTouch menu","",0)
-        cfrequest := NewTapElementRequest("","AssistiveTouch menu","",0)
-        cfrequest.ProcessID=json.Number(strconv.Itoa(int(pid)))
+        cfrequest := NewCFRequest(CFTap,ElementSearch{ID:"AssistiveTouch menu",ProcessID:pid})
         cfresponse := self.cfa.SendCFRequestAndWait(cfrequest)
-log.Warn("Called TapElement with response ",cfresponse.Error)
-        if(cfresponse.Error==""){
+log.Warn("Called TapElement with response ",cfresponse.Status)
+        if(cfresponse.Status=="ok"){
             return ""
         }
         time.Sleep( time.Millisecond * 100 )
@@ -1011,8 +1007,7 @@ func (self *Device) ShowTaskSwitcher() (errorstr string) {
         }
         
         //Untested. Need iOS 15
-        cfrequest := NewTapElementRequest("","Multitasking","",0)
-        cfrequest.ProcessID=json.Number(strconv.Itoa(int(pid)))
+        cfrequest := NewCFRequest(CFTap,ElementSearch{ID:"Multitasking",ProcessID:pid})
         cfresponse := self.cfa.SendCFRequestAndWait(cfrequest)
 
         if(cfresponse.Status =="ok"){
@@ -1034,7 +1029,7 @@ func (self *Device) ShowTaskSwitcher() (errorstr string) {
         //XCTRunnerDaemonSession unregonized selector (iOS 14), untested...
         //cfrequest := NewGetApplicationStructureAtPointRequest("","appCloseBox",x,y,0)
         //try this for kicks instead, since the position seems irrelevant. I have no idea
-        cfrequest := NewGetApplicationStructureRequest("","appCloseBox",-1,0)
+        cfrequest := NewCFRequest(CFGetApplicationStructure,ElementSearch{ID:"appCloseBox",ProcessID:-1})
         cfresponse := self.cfa.SendCFRequestAndWait(cfrequest)
         if cfresponse.Status == "ok"{ 
             break
@@ -1068,15 +1063,15 @@ func (self *Device) dismissAlerts () (errorstr string) {
 //   return self.cfa.StartBroadcastApp()
 //}
 
-func (self *Device) isAssistiveTouchEnabled() (bool, int32) {
-    var pid int32
+func (self *Device) isAssistiveTouchEnabled() (bool, int) {
+    var pid int
     procs := self.bridge.ps()
 
     fmt.Println("QQQQQQ %v",procs)
 
     for _,proc := range procs {
         if proc.name == "assistivetouchd" {
-            pid = proc.pid
+            pid = int(proc.pid)
             break
         } 
     }
@@ -1338,13 +1333,18 @@ func (self *Device) startVidStreamRtc() {
     
     if self.vidStreamer != nil {
         self.vidStreamer.setImageConsumer( imgConsumer )
-        fmt.Printf("Telling video stream to start\n")
+        fmt.Printf("Telling video stream to start2\n")
         controlChan <- 1 // start
     }
 }
 
-func (self *Device) initWebrtc( cfrequest CFRequest ) (){
-    offer := cfrequest.Offer
+func (self *Device) initWebrtc( cfrequest *CFRequest  ) (){
+    var w WebRTCRequest
+    err := cfrequest.GetArgs(&w)
+    if err != nil || w.Offer==""{
+        panic("Write more code")
+    }
+    offer := w.Offer
     fmt.Printf("Running initWebrt\n")
     peer, answer := startWebRtc( 
         offer,
@@ -1364,5 +1364,5 @@ func (self *Device) initWebrtc( cfrequest CFRequest ) (){
     fmt.Printf("Running initWebrt - Got answer\n")
     self.rtcPeer = peer
     
-    self.cf.ToServerCFResponseChan <- *NewOkValueResponse(cfrequest, answer)
+    self.cf.ToServerCFResponseChan <- NewOkValueResponse(cfrequest, answer)
 }

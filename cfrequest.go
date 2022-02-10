@@ -2,252 +2,273 @@ package main
 
 import (
     "encoding/json"
-    "strconv"
+    "fmt"
 )
 
-type IOSAlertButton struct{
-   Description string `json:"description"`
-   CenterX json.Number `json:"centerX"`
-   CenterY json.Number `json:"centerY"`
-}
-type IOSAlert struct{
-   Title string `json:"title"`
-   Description string `json:"description"`
-   Buttons []IOSAlertButton `json:"buttons"`
-}
+// These exist to let the compiler catch typos
+// In general, NewCFRequest() should take a command from this list
+// If you make a new command, and need to execute it from go, add it 
+// to this list.
+const (
+  CFGetActiveApplicationPids = "getActiveApplicationPids"
+  CFGetAlert                 = "getAlert"
+  CFGetApplicationStructure  = "getActiveApplicationStructure"
+  CFGetElement               = "getElement"
+  CFGetOrientation           = "getOrientation"
+  CFGetSource                = "getSource"
+  CFGetSourceJSON            = "getSourceJSON"
+  CFGetWindowSize            = "getWindowSize"
+  CFLaunchApplication        = "launchApplication"    
+  CFNoOp                     = "noOp"
+  CFPing                     = "ping"
+  CFShowApplicationLauncher  = "showApplicationLauncher"    
+  CFSimulateHomeButton       = "simulateHomeButton"    
+  CFStartVideoStream         = "startVideoStream"
+  CFStopVideoStream          = "stopVideoStream"
+  CFSwipe                    = "swipe"
+  CFTap                      = "tap"
+  CFTapAndHold               = "tapAndHold"
+  CFUpdateApplication        = "updateApplication"    
+)
 
-func NewIOSAlertFromJSONString(s string) (IOSAlert,error){
-   return NewIOSAlertFromJSONBytes([]byte(s))
+type CFRoutingData struct{
+    CFDeviceID         string `json:"d,omitempty"`         //Currently UDID, but should change to an internally assigned if....
+    CFServerRequestID     int `json:"s,omitempty"`         //Used to track asynchronous replies from server
+    CFServerChannelID     int `json:"c,omitempty"`         //Used to track asynchronous replies from server
+    CFProviderRequestID   int `json:"p,omitempty"`         //Used to track asynchronous replies from provider
 }
-func NewIOSAlertFromJSONBytes(b []byte) (IOSAlert,error){
-    var a IOSAlert
-    err := json.Unmarshal([]byte(b),&a);
-    return a,err
-}
-
-type Rectangle struct{
-    X float64      `json:"x"`
-    Y float64      `json:"y"`
-    Width float64  `json:"width"`
-    Height float64 `json:"height"`
-}
-func NewRectangleFromJSONBytes(b []byte) (Rectangle,error) {
-    var r Rectangle
-    err := json.Unmarshal([]byte(b),&r);
-    return r,err
-}
-func NewRectangleFromJSONString(s string) (Rectangle, error){
-    return NewRectangleFromJSONBytes([]byte(s))
-}
-
-func jn64(d float64) json.Number{
-    x := strconv.FormatFloat(d, 'f', -1, 64)
-    if x == "0"{
-        return json.Number("")
-    }
-    return json.Number(x)
-}
-
-type CFResponse struct{
-    Action      string `json:"action"`                //Always echo back action to simplify debugging...
-    Tag         string `json:"tag,omitempty"`         //If non-blank, will be echoed back on asynchronous reply.  
-    Status      string `json:"status"`                //Currently: ok,error
-    Error       string `json:"error,omitempty"`                 //Error message
-    Value       string `json:"value,omitempty"`       //Value returned to requester. Potentially a JSON blob needing further decoding
-    OriginalRequest string `json:"originalRequest,omitempty"` //For debugging purposes
-
-    CFDeviceID           string `json:"cfdeviceid,omitempty"`   //Currently UDID, but should change to an internally assigned if....
-    CFServerRequestID     int32 `json:"cfsrid,omitempty"`       //Used to track asynchronous replies from server
-    CFServerChannelID     int32 `json:"cfscid,omitempty"`         //Used to track asynchronous replies from server
-    CFProviderRequestID   int32 `json:"cfprid,omitempty"`       //Used to track asynchronous replies from provider
-    CFServerRequiresAck   int32 `json:"cfsack,omitempty"`       //Even ok() with no value requires ack returned to ControlFloor server
-    CFProviderRequiresAck int32 `json:"cfpack,omitempty"`       //Even ok() with no value requires ack returned to ControlFloor provider
-}
-
 
 type CFRequest struct{
-    Action      string `json:"action"`                //Required: tap, doubleTap, text, etc...
-    Tag         string `json:"tag,omitempty"`         //If non-blank, will be echoed back on asynchronous reply.  If blank, replies only on error
-
-    
-    ElementHandle string `json:"elementHandle,omitempty"`   //Control Floor cached internal temporary identifier
-    ElementID     string `json:"elementId,omitempty"`   //iOS element.identifier
-    ElementType   string `json:"elementType,omitempty"` //(tap,click)
-    ElementSearchPath string `json:"elementSearchPath,omitempty"` //"application,system","system,application","system",(default)"application"    
-
-    Text        string `json:"text,omitempty"`        //Generic "text" parameter (typeText, etc)
-    Orientation string `json:"orientation,omitempty"` //For setOrientation: portrait, portraitUpsideDown, landscapeLeft, landscapeRight
-    Key         string `json:"key,omitempty"`         //TypeSpecialKey 
-    Offer       string `json:"offer,omitempty"`       //WebRTC 
-    
-//    Value       string `json:"value,omitempty"`       //Generic "value" param for setter functions.  
-//    Modifier    string `json:"modifier,omitempty"`    //envisioned as a modifier key (shift, ctrl, windows,....) for typing
-
-    //For x*,y* values
-    //nsform   string `json:",omitempty"`      //if target == "video", all x,y coords need translation based on screen rotation
-
-    //coordinates for positional commands (tap, click, press)
-    X  json.Number `json:"x,omitempty"`
-    Y  json.Number `json:"y,omitempty"`
-
-    //coordinates for motion commands (positional swipe)
-    X1 json.Number `json:"x1,omitempty"`
-    Y1 json.Number `json:"y1,omitempty"`
-    X2 json.Number `json:"x2,omitempty"`
-    Y2 json.Number `json:"y2,omitempty"`
-
-    // tapAndHold/longPress etc.
-    Duration json.Number `json:"duration,omitempty"`
-    Timeout  json.Number `json:"timeout,omitempty"`
-
-    //source() command
-    BundleID string       `json:"bundleId,omitempty"`
-    ProcessID json.Number `json:"processId,omitempty"`
-
-    //ioHID
-    Page  json.Number `json:"page,omitempty"`
-    Usage json.Number `json:"usage,omitempty"`
-
-    Direction string  `json:"direction,omitempty"`   //up down left right,  used for non-positional swipe
-    Velocity json.Number `json:"velocity,omitempty"` //pixels per second
-
+    CFRoutingData                    `json:"cf,omitempty"`            //Control floor agent will echo anything under the 'cf' tag
+    Action           string          `json:"action"`        //Required: tap, doubleTap, text, etc...
+    Tag              json.RawMessage `json:"tag,omitempty"` //If non-blank, will be echoed back on reply
+    RequiresResponse IntBool         `json:"ack,omitempty"` //If 1, ack required, else optional. Can be set to one by the customer, 
+                                                            //the server, or the provider anywhere along the way, and CFAgent is always free
+                                                            //to send a response. 
+    Args             json.RawMessage `json:"args,omitempty"`
     //The following fields are for internal use between server and provider
-    CFDeviceID           string `json:"cfdeviceid,omitempty"`          //Currently UDID, but should change to an internally assigned if....
-    CFServerRequestID     int32 `json:"cfsrid,omitempty"`         //Used to track asynchronous replies from server
-    CFServerChannelID     int32 `json:"cfscid,omitempty"`         //Used to track asynchronous replies from server
-    CFProviderRequestID   int32 `json:"cfprid,omitempty"`         //Used to track asynchronous replies from provider
-    CFServerRequiresAck   int32 `json:"cfsack,omitempty"`       //Even ok() with no value requires ack returned to ControlFloor server
-    CFProviderRequiresAck int32 `json:"cfpack,omitempty"`       //Even ok() with no value requires ack returned to ControlFloor provider
     onRes func( CFResponse ) `json:"-"`      //Questionable....
 }
 
-func NewClickRequest(x float64, y float64) (*CFRequest){
-    return &CFRequest{Action:"click", X:jn64(x), Y:jn64(y)}
+func NewCFRequest(action string,data interface{}) *CFRequest{
+    cfrequest := CFRequest{Action:action}
+    var err error
+    if data!=nil{
+        cfrequest.Args,err = json.Marshal(data)
+        if(err!=nil){
+            panic("Error encoding internally generated JSON?!")
+        } 
+    }
+    return &cfrequest
 }
 
-func NewTapElementRequest( elementType string, elementID string, searchPath string, timeout float64 ) (*CFRequest){
-    return &CFRequest{Action:"tap",ElementID:elementID,ElementType:elementType,ElementSearchPath:searchPath,Timeout:jn64(timeout)}
+//Internal requests (to/from server, provider, or agent preserve all Routing data as-is)
+//Also, they are presumed to be well-formatted, hence panic() on error
+func NewInternalCFRequestFromJSON(b []byte) (*CFRequest,error){
+    var r CFRequest;
+    err:= json.Unmarshal(b,&r)
+    if(err!=nil){
+        return nil,err
+    }
+    return &r,nil
 }
-func NewGetApplicationStructureRequest( elementType string, elementID string, processID int, timeout float64 ) (*CFRequest){
-    return &CFRequest{Action:"getApplicationStructureAtPoint",ElementID:elementID,ElementType:elementType,Timeout:jn64(timeout),ProcessID:json.Number(strconv.Itoa(processID))}
+//from customer/web client/command line/etc.
+//no initial Routing data allowed, more permissive validation perhaps
+//also, allowed to fail on invalid input, caller must handle
+func NewExternalCFRequestFromJSON(b []byte) (*CFRequest,error){
+    var r CFRequest;
+    err:= json.Unmarshal(b,&r)
+    if(err!=nil){
+        r.ClearRoutingData() //just in case customer defines this, clobber it
+        return nil, err
+    }
+    return &r,nil
 }
-//elementType and elementID should generally be blank, but if provided a secondary search will be performed.
-//in effect, nothing will be returned unless the element you are looking for is actually at the specified point
-func NewGetApplicationStructureAtPointRequest( elementType string, elementID string, x float64, y float64, timeout float64 ) (*CFRequest){
-    return &CFRequest{Action:"getApplicationStructureAtPoint",ElementID:elementID,ElementType:elementType,Timeout:jn64(timeout),X:jn64(x), Y:jn64(y)}
+func (self *CFRequest) JSONBytes() ([]byte,error){
+    return json.Marshal(self)
 }
-func NewGetElementStructureAtPointRequest( elementType string, elementID string, x float64, y float64, timeout float64 ) (*CFRequest){
-    return &CFRequest{Action:"getElementStructureAtPoint",ElementID:elementID,ElementType:elementType,Timeout:jn64(timeout),X:jn64(x), Y:jn64(y)}
+//Pass in a *struct representing the data you expect to receive.  
+func (self *CFRequest) GetArgs(d interface{}) error{
+    return json.Unmarshal(self.Args,d)
 }
-func NewTapAndHoldElementRequest( elementType string, elementID string, searchPath string, timeout float64 ) (*CFRequest){
-    return &CFRequest{Action:"tapAndHold",ElementID:elementID,ElementType:elementType,Timeout:jn64(timeout)}
+func (self *CFRequest) ClearRoutingData(){
+    self.CFRoutingData = CFRoutingData{}
+}
+
+
+
+type CFResponse struct{
+    CFRoutingData               `json:"cf,omitempty"`                //Control floor agent will echo anything under the 'cf' tag
+    Tag         json.RawMessage `json:"tag,omitempty"`     //If non-blank, will be echoed back on reply
+    MessageType string          `json:"type,omitempty"`    //response, notice
+    Status      string          `json:"status,omitempty"`  //Currently: ok,error,or notice type (ORIENTATION_CHANGED)
+    Error       string          `json:"error,omitempty"` 
+    //Renamed Value->RawValue to discourage accidental misuse inside go code
+    RawValue    json.RawMessage `json:"value,omitempty"`
 }
 
 
-func NewSwipeRequest(x1 float64, y1 float64, x2 float64, y2 float64, duration float64) (*CFRequest){
-    return &CFRequest{Action:"swipe", X1:jn64(x1), Y1:jn64(y1), X2:jn64(x2), Y2:jn64(y2),Duration:jn64(duration)}
+//Internal requests (to/from server, provider, or agent preserve all Routing data as-is)
+//Also, they are presumed to be well-formatted, hence panic() on error
+func NewCFResponseFromJSON(b []byte) (*CFResponse, error){
+    var r CFResponse;
+    err:= json.Unmarshal(b,&r)
+    return &r,err
 }
-//The only reason for these definitions is compile-time checks vs. runtime typo checks
-func NewGetOrientationRequest()(*CFRequest){
-   return &CFRequest{Action:"getOrientation"}
-}
-func NewSetOrientationRequest(orientation string) (*CFRequest){
-   return &CFRequest{Action:"getOrientation",Orientation:orientation}
-}
-func NewSimulateHomeButtonRequest() (*CFRequest){
-   return &CFRequest{Action:"simulateHomeButton"}
-}
-//Write the specified message directly to the iOS device's log file
-func NewNSLogRequest(text string) (*CFRequest) {
-   return &CFRequest{Action:"nslog",Text:text}
-}
-
-func NewGetWindowSizeRequest()(*CFRequest){
-   return &CFRequest{Action:"getWindowSize"}
-}
-func NewLaunchApplicationRequest(bundleID string)(*CFRequest){
-   return &CFRequest{Action:"launchApplication",BundleID:bundleID}
-}
-func NewTapAndHoldRequest(x float64, y float64) (*CFRequest){
-   return &CFRequest{Action:"tapAndHold", X:jn64(x), Y:jn64(y)}
-}
-
-func NewOkResponse(r CFRequest)(*CFResponse){
-   return &CFResponse{
-       Action:r.Action,
+func NewCFResponse (r *CFRequest,status string, value interface{},error string)(*CFResponse){
+   cfresponse := CFResponse{
+       MessageType:"response",
        Tag:r.Tag,
-       Status:"ok",
-       CFDeviceID:r.CFDeviceID,
-       CFServerRequestID:r.CFServerRequestID,
-       CFServerChannelID:r.CFServerChannelID,
-   }
-}
-func NewPongResponse(r CFRequest)(*CFResponse){
-   return &CFResponse{
-       Action:r.Action,
-       Tag:r.Tag,
-       Status:"ok",
-       Value:"pong",
-       CFDeviceID:r.CFDeviceID,
-       CFServerRequestID:r.CFServerRequestID,
-       CFServerChannelID:r.CFServerChannelID,
-   }
-}
-func NewErrorResponse(r CFRequest, error string)(*CFResponse){
-   return &CFResponse{
-       Action:r.Action,
-       Tag:r.Tag,
-       Status:"error",
+       Status:status,
        Error:error,
-       CFDeviceID:r.CFDeviceID,
-       CFServerRequestID:r.CFServerRequestID,
-       CFServerChannelID:r.CFServerChannelID,
+       CFRoutingData:r.CFRoutingData,
    }
-}
-func NewOkValueResponse(r CFRequest, i interface{})(*CFResponse){
-   bytes,_ := json.Marshal(i)
-   return &CFResponse{
-       Action:r.Action,
-       Tag:r.Tag,
-       Status:"ok",
-       CFDeviceID:r.CFDeviceID,
-       CFServerRequestID:r.CFServerRequestID,
-       CFServerChannelID:r.CFServerChannelID,
-       Value:string(bytes),
+   if(value!=nil){
+       cfresponse.SetValue(value)
    }
+   return &cfresponse
+}
+func NewOkResponse(r *CFRequest)(*CFResponse){
+   return NewCFResponse(r,"ok",nil,"")
+}
+func NewPongResponse(r *CFRequest)(*CFResponse){
+   return NewCFResponse(r,"ok","pong","")
+}
+func NewErrorResponse(r *CFRequest, error string)(*CFResponse){
+   return NewCFResponse(r,"error",nil,error)
+}
+func NewOkValueResponse(r *CFRequest, value interface{})(*CFResponse){
+   return NewCFResponse(r,"ok",value,"")
+}
+func (self *CFResponse) JSONBytes() ([]byte,error){
+    return json.Marshal(self)
+}
+func (self *CFResponse) HasValue() bool{
+   //TODO: Code below assumes no data returned at all.
+   //what if cfagent returns 'null'. Don't do that?
+   return len([]byte(self.RawValue)) > 0
 }
 
-func (self *CFRequest) resHandler() ( func(cfresponse CFResponse) ) {
-    return self.onRes
+func (self *CFResponse) ClearRoutingData(){
+    self.CFRoutingData = CFRoutingData{}
 }
-func (self *CFRequest) needsResponse() (bool) { return true }
-
-func (self *CFRequest) asText( id int16 ) (string) {
-    self.CFServerRequestID = int32(id);
-    bytes,_ := json.Marshal(self)
-    return string(bytes)
+func (self *CFResponse)  GetValue(d interface{}) error{
+    return json.Unmarshal(self.RawValue,d)
+}
+func (self *CFResponse)  SetValue(d interface{}) error{
+    if(d == nil){
+        self.RawValue = nil //don't want to marshall nil to 'null'. would this matter?
+        return nil
+    }else{
+        var err error
+        self.RawValue,err = json.Marshal(d)
+        return err
+    }
 }
 
-//Notices are triggered from either the provider or CFAgent
-//They are returned
-//type CFNotice struct{
-//    Event       string `json:"event"`
-//    Orientation string `json:"orientation,omitempty"`
-//}
-//func NewOrientationNoticeResponse(deviceID string, orientation string) *CFResponse {
-//    notice := CFEventNotice{Event:"orientationChanged",Orientation:orientation}
-//    return NewCFEventNoticeResponse(deviceID, notice)
-//}
-//func NewCFEventNoticeResponse(deviceID string, event CFEventNotice) *CFResponse {
-//    bytes,_ := json.Marshal(event)
-//    cfresponse := CFResponse{Action:"eventNotice",Value:string(bytes),CFDeviceID:deviceID}
-//    return &cfresponse
-//}
+type IOSButton struct{
+   Description string `json:"description"`
+   CenterX float64    `json:"centerX"`
+   CenterY float64    `json:"centerY"`
+}
+type IOSAlert struct{
+   Title string        `json:"title"`
+   Description string  `json:"description"`
+   Buttons []IOSButton `json:"buttons"`
+}
+type Rectangle struct{
+    X float64       `json:"x"`
+    Y float64       `json:"y"`
+    Width float64   `json:"width"`
+    Height float64  `json:"height"`
+}
+
+
+//Customer may set to true or 1,we'd like to be permissive
+//Prefer compact "1" in transit. Can delete all of this and force "true" end-to-end if preferred...
+type IntBool bool
+func (b *IntBool) UnmarshalJSON(data []byte) error {
+    asString := string(data)
+    if asString == "1" || asString == "true" {
+        *b = true
+    } else if asString == "0" || asString == "false" {
+        *b = false
+    } else {
+        return fmt.Errorf("Boolean unmarshal error: invalid input %s", asString)
+    }
+    return nil
+}
+func (b IntBool) MarshalJSON()([]byte,error) {
+    if(b){
+        return []byte("1"),nil
+    }
+    return []byte("0"),nil
+}
+
+
+// NOTE: This function is a shortcut for simple string responses
+//       This is distinct from string(self.RawValue), which would return
+//       human-readable JSON data, regardless of type
+func (self *CFResponse)  StringValue() string{
+    var s string
+    json.Unmarshal(self.RawValue,&s)
+    return s
+}
+
+type PathPoint struct {
+    X float64  `json:"x"`
+    Y float64  `json:"y"`
+    Offset float64 `json:"offset"`
+}
+type Point struct {
+    X float64  `json:"x"`
+    Y float64  `json:"y"`
+}
+type Swipe struct {
+    Path []PathPoint `json:"path"`
+}
+
+func NewSimpleSwipe(x1,y1,x2,y2,offset float64) Swipe{
+    var swipe Swipe
+    swipe.Path = append(swipe.Path,PathPoint{X:x1,Y:y1,Offset:0})
+    swipe.Path = append(swipe.Path,PathPoint{X:x2,Y:y2,Offset:offset})
+    return swipe
+}
+
+type ElementSearch struct {
+    Handle     string  `json:"elementHandle,omitempty"`     //Control Floor cached internal temporary identifier
+    ID         string  `json:"elementId,omitempty"`         //iOS element.identifier
+    Type       string  `json:"elementType,omitempty"`       //(tap,click)
+    SearchPath string  `json:"elementSearchPath,omitempty"` //"application,system","system,application","system",(default)"application"    
+    Timeout    float64 `json:"timeout,omitempty"`
+    ProcessID  int     `json:"processId,omitempty"`       
+}
+type Application struct{
+    BundleID string  `json:"bundleId"`
+}
+type Process struct{
+    ProcessID int `json:"processId"`
+}
+type WebRTCRequest struct {
+    Offer string `json:"offer"`
+}
+
+
+func NewCFNotice(deviceID string, noticeType string, value interface{}) (*CFResponse){
+   cfresponse := CFResponse{
+       MessageType:"notice",
+       Status:noticeType,
+   }
+   cfresponse.CFDeviceID = deviceID
+   cfresponse.SetValue(value)
+   return &cfresponse
+}
+
 func NewOrientationChangedNotice(deviceID string, orientation string) *CFResponse {
-    return &CFResponse{Action:"notice",Status:"ORIENTATION_CHANGED",Value:orientation,CFDeviceID:deviceID}
+    return NewCFNotice(deviceID, "ORIENTATION_CHANGED", orientation)
 }
 func NewAlertDismissedNotice(deviceID string, title string, button string) *CFResponse {
-    return &CFResponse{Action:"notice",Status:"ALERT_DISMISSED",Value:"Dismissed \""+title+"\". Selected \""+button+"\"",CFDeviceID:deviceID}
+    return NewCFNotice(deviceID, "ALERT_DISMISSED", `Dismissed "`+title+`". Selected "`+button+`"`)
 }
 
 
