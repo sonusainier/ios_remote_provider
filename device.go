@@ -295,11 +295,11 @@ func (self *Device) startEventLoop() {
                     errorstr = self.startVideoStream(cfrequest) 
                 } else if action == "stopVideoStream" {
                     errorstr = self.stopVideoStream()
-                } else if action == "wifiIp" {
-                    errorstr = "Not Implemented"
-                    //responseOkValue(cfrequest,"TODO-WIFI-IP")
-//                    ip := dev.WifiIp()
-//                    mac := dev.WifiMac()
+                } else if action == "getWifiMAC" { //getWifiIP implemented in CFAgent, agent cannot determine mac
+                     //mac := self.getWifiMAC()
+                     //self.cf.ToServerCFResponseChan <- NewOkValueResponse(cfrequest,mac)
+                     self.cf.ToServerCFResponseChan <- NewErrorResponse(cfrequest,"NOT_IMPLEMENTED")
+                     handled = true
                 } else if action == "killApplication" {
                     errorstr = self.killApplication( application.BundleID )
                 } else if action == "launchApplication" || action == "launch" {
@@ -1148,9 +1148,6 @@ func (self *Device) toggleAssistiveTouch() (errorstr string) {
 //    return self.cfa.SourceJson()
 //}
 
-func (self *Device) WifiIp() string {
-    return self.cfa.WifiIp()
-}
 
 //TODO: re-enable
 /*
@@ -1158,15 +1155,13 @@ func (self *Device) WifiIp() string {
 //    return self.cfa.AppAtPoint(x,y,false,false,false)
 //}
 */
-/* TODO reenable
-func (self *Device) WifiMac() string {
+func (self *Device) getWifiMAC() string {
     info := self.bridge.info( []string{"WiFiAddress"} )
     val, ok := info["WiFiAddress"]
     if ok { 
     return val }
     return "unknown"
 }
-*/
 func (self *Device) killApplication( bundleID string ) ( errorstr string ){
     self.bridge.KillBid( bundleID )
     return ""

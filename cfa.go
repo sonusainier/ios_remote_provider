@@ -577,6 +577,7 @@ func (self *CFA) home() string {
     return self.SendCFRequestAndWait(NewCFRequest(CFSimulateHomeButton,nil)).Error
 }
 
+/*
 func (self *CFA) AT() (string) {
     json := `{
       action: "homebtn"
@@ -590,7 +591,7 @@ func (self *CFA) AT() (string) {
     
     return ""
 }
-
+*/
 func (self *CFA) keysXXX( codes []int ) {
     if len( codes ) > 1 {
         self.typeText( codes )
@@ -824,13 +825,6 @@ func (self *CFA) AlertInfo() ( uj.JNode, string ) {
         if presentNode.Bool() == false { return nil, string(jsonBytes) }
         return root, string(jsonBytes)
     }
-}
-
-func (self *CFA) WifiIp() string {
-    self.nngSocket.Send([]byte(`{ action: "wifiIp" }`))
-    srcBytes, _ := self.nngSocket.Recv()
-    
-    return string(srcBytes)
 }
 
 func (self *CFA) ActiveApps() string {

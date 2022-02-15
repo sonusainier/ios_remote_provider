@@ -107,7 +107,6 @@ type CFResponse struct{
     RawValue    json.RawMessage `json:"value,omitempty"`
 }
 
-
 //Internal requests (to/from server, provider, or agent preserve all Routing data as-is)
 //Also, they are presumed to be well-formatted, hence panic() on error
 func NewCFResponseFromJSON(b []byte) (*CFResponse, error){
@@ -117,7 +116,7 @@ func NewCFResponseFromJSON(b []byte) (*CFResponse, error){
 }
 func NewCFResponse (r *CFRequest,status string, value interface{},error string)(*CFResponse){
    cfresponse := CFResponse{
-       MessageType:"response",
+       MessageType:"reply",
        Tag:r.Tag,
        Status:status,
        Error:error,
@@ -135,6 +134,9 @@ func NewPongResponse(r *CFRequest)(*CFResponse){
    return NewCFResponse(r,"ok","pong","")
 }
 func NewErrorResponse(r *CFRequest, error string)(*CFResponse){
+   if(r == nil){ //When the server immidiately returns an error without issuing a request
+       return &CFResponse{MessageType:"reply",Error:error}
+   }
    return NewCFResponse(r,"error",nil,error)
 }
 func NewOkValueResponse(r *CFRequest, value interface{})(*CFResponse){

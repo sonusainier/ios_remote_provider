@@ -64,7 +64,6 @@ func main() {
     uclop.AddCmd( "raw",      "Send raw file to device, print output", runRawJson,   rawOpt )
     uclop.AddCmd( "interactive", "Read from stdin, one line per JSON command", runInteractive,  runOpts )
     uclop.AddCmd( "source",    "Get device xml source",            runSource,     sourceOpts )
-    uclop.AddCmd( "wifiIp",    "Get Wifi IP address",              runWifiIp,     idOpt )
     uclop.AddCmd( "wifiMac",   "Get Wifi Mac address",             runWifiMac,    idOpt )
     uclop.AddCmd( "activeApps","Get pids of active apps",          runActiveApps, idOpt )
 //    uclop.AddCmd( "toLauncher","Return to launcher screen",        runToLauncher, idOpt )
@@ -521,12 +520,6 @@ func runAlertInfo( cmd *uc.Cmd ) {
     } )
 }
 
-func runWifiIp( cmd *uc.Cmd ) {
-    cfaWrapped( cmd, "", func( cfa *CFA, dev *Device ) {
-        ip := cfa.WifiIp()
-        fmt.Println( ip )
-    } )
-}
 
 func runInteractive( cmd *uc.Cmd ) {
     config := common( cmd )
