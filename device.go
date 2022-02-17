@@ -761,7 +761,13 @@ func (self *Device) adaptToRotation(x int, y int) (int, int) {
 	w := self.devConfig.uiWidth
 	h := self.devConfig.uiHeight
 
-	switch self.orientation {
+	orientation := self.orientation
+	// when in landscape mode, and we go to home screen, orientation comes at portrait. -> orientation should be either landscape left
+	if _, ok := OrientationMap[self.udid]; ok {
+		orientation = OrientationMap[self.udid]
+	}
+	fmt.Printf("RotateState: %s\n", orientation)
+	switch orientation {
 	case "portrait":
 	case "portraitUpsideDown":
 		x, y = (w - x), (h - y)

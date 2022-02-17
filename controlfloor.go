@@ -38,6 +38,8 @@ type ControlFloor struct {
 	selfSigned bool
 }
 
+var OrientationMap = map[string]string{}
+
 func NewControlFloor(config *Config) (*ControlFloor, chan bool) {
 	jar, err := cookiejar.New(&cookiejar.Options{})
 	if err != nil {
@@ -586,6 +588,11 @@ func (self *ControlFloor) openWebsocket() {
 					orientation := root.Get("orientation").String()
 					go func() {
 						dev := self.DevTracker.getDevice(udid)
+						if _, ok := OrientationMap[udid]; !ok {
+							OrientationMap[udid] = orientation
+						} else {
+							OrientationMap[udid] = orientation
+						}
 						if dev != nil {
 							dev.RotateDevice(orientation)
 							respondChan <- &CFR_Rotate{Id: id, Rotate: "true"}
