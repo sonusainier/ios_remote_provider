@@ -2,11 +2,14 @@ package main
 
 import (
 	"fmt"
+	// "bytes"
+	"bufio"
 	"net/http"
 	"os"
 	"os/signal"
 
 	//"runtime/pprof"
+	"io/ioutil"
 	"strconv"
 	"strings"
 	"syscall"
@@ -31,6 +34,14 @@ func main() {
 	idOpt := uc.OPTS{
 		uc.OPT("-id", "Udid of device", 0),
 	}
+	rawOpt := uc.OPTS{
+		uc.OPT("-file", "path to json file", 0),
+		uc.OPT("-action", "explicit action name. works only when no args required", 0),
+		uc.OPT("-bundleId", "bundleId", 0),
+		uc.OPT("-x", "x", 0),
+		uc.OPT("-y", "y", 0),
+		uc.OPT("-text", "text", 0),
+	}
 
 	runOpts := append(commonOpts,
 		idOpt[0],
@@ -43,7 +54,7 @@ func main() {
 
 	//uclop.AddCmd( "wda",       "Just run WDA",                     runWDA,        idOpt )
 	uclop.AddCmd("cfa", "Just run CFA", runCFA, idOpt)
-	uclop.AddCmd("winsize", "Get device window size", runWindowSize, idOpt)
+	uclop.AddCmd("winsize", "Get device window size", runGetWindowSize, idOpt)
 	uclop.AddCmd("screenshot", "Get screenshot", runScreenshot, idOpt)
 	uclop.AddCmd("shottest", "Test video via screenshots", runShotTest, idOpt)
 	uclop.AddCmd("at", "Activate assistiveTouch", runAt, idOpt)
@@ -52,51 +63,41 @@ func main() {
 		uc.OPT("-bi", "Bundle ID", 0),
 		uc.OPT("-pid", "PID", 0),
 	)
+	uclop.AddCmd("raw", "Send raw file to device, print output", runRawJson, rawOpt)
+	uclop.AddCmd("interactive", "Read from stdin, one line per JSON command", runInteractive, runOpts)
 	uclop.AddCmd("source", "Get device xml source", runSource, sourceOpts)
-	uclop.AddCmd("wifiIp", "Get Wifi IP address", runWifiIp, idOpt)
 	uclop.AddCmd("wifiMac", "Get Wifi Mac address", runWifiMac, idOpt)
 	uclop.AddCmd("activeApps", "Get pids of active apps", runActiveApps, idOpt)
-	uclop.AddCmd("toLauncher", "Return to launcher screen", runToLauncher, idOpt)
+	//    uclop.AddCmd( "toLauncher","Return to launcher screen",        runToLauncher, idOpt )
 	uclop.AddCmd("alertinfo", "Get alert info", runAlertInfo, idOpt)
-	uclop.AddCmd("islocked", "Check if device screen is locked", runIsLocked, idOpt)
-	uclop.AddCmd("unlock", "Unlock device screen", runUnlock, idOpt)
+	//    uclop.AddCmd( "islocked",  "Check if device screen is locked", runIsLocked,   idOpt )
+	//    uclop.AddCmd( "unlock",    "Unlock device screen",             runUnlock,     idOpt )
 	uclop.AddCmd("listen", "Test listening for devices", runListen, commonOpts)
+	uclop.AddCmd("ping", "Ping device", runPing, idOpt)
 
-	clickButtonOpts := append(idOpt,
-		uc.OPT("-label", "Button label", uc.REQ),
-		//uc.OPT("-system","System element",uc.FLAG),
-	)
-	uclop.AddCmd("clickEl", "Click a named element", runClickEl, clickButtonOpts)
-	uclop.AddCmd("forceTouchEl", "Force touch a named element", runForceTouchEl, clickButtonOpts)
-	uclop.AddCmd("longTouchEl", "Long touch a named element", runLongTouchEl, clickButtonOpts)
+	//    clickButtonOpts := append( idOpt,
+	//        uc.OPT("-label","Button label",uc.REQ),
+	//        //uc.OPT("-system","System element",uc.FLAG),
+	//    )
+	//    uclop.AddCmd( "clickEl", "Click a named element", runClickEl, clickButtonOpts )
+	//    uclop.AddCmd( "forceTouchEl", "Force touch a named element", runForceTouchEl, clickButtonOpts )
+	//    uclop.AddCmd( "longTouchEl", "Long touch a named element", runLongTouchEl, clickButtonOpts )
 	uclop.AddCmd("addRec", "Add Recording to Control Center", runAddRec, idOpt)
-
-	appAtOpts := append(idOpt,
-		uc.OPT("-x", "X", 0),
-		uc.OPT("-y", "Y", 0),
-	)
-	uclop.AddCmd("appAt", "App at point", runAppAtPoint, appAtOpts)
 
 	runAppOpts := append(idOpt,
 		uc.OPT("-name", "App name", uc.REQ),
 	)
 	uclop.AddCmd("runapp", "Run named app", runRunApp, runAppOpts)
 
-	siriOpts := append(idOpt,
-		uc.OPT("-cmd", "Siri command text", uc.REQ),
-	)
-	uclop.AddCmd("siri", "Run siri", runSiri, siriOpts)
+	//    siriOpts := append( idOpt,
+	//        uc.OPT("-cmd","Siri command text",uc.REQ),
+	//    )
+	//    uclop.AddCmd( "siri", "Run siri", runSiri, siriOpts )
 
-	elByPidOpts := append(idOpt,
-		uc.OPT("-pid", "PID", uc.REQ),
-	)
-	uclop.AddCmd("elByPid", "Get source of pid", runElByPid, elByPidOpts)
-
-	pidChildWithWidthOpts := append(idOpt,
-		uc.OPT("-pid", "PID", uc.REQ),
-		uc.OPT("-width", "With", uc.REQ),
-	)
-	uclop.AddCmd("pidChildWithWidth", "Get element that is a child of pid with specified width", runPidChildWithWidth, pidChildWithWidthOpts)
+	//    elByPidOpts := append( idOpt,
+	//        uc.OPT("-pid","PID",uc.REQ),
+	//    )
+	//    uclop.AddCmd( "elByPid", "Get source of pid", runElByPid, elByPidOpts )
 
 	uclop.AddCmd("vidtest", "Test backup video", runVidTest, idOpt)
 
@@ -143,6 +144,7 @@ func goIosGetOne(udid string, onDone func(ios.DeviceEntry)) {
 func cfaForDev(id string) (*CFA, *DeviceTracker, *Device) {
 	config := NewConfig("config.json", "default.json", "calculated.json")
 
+	fmt.Println("WWWW NewDeviceTracker 3")
 	tracker := NewDeviceTracker(config, false, []string{})
 
 	devs := tracker.bridge.GetDevs(config)
@@ -192,6 +194,7 @@ func cfaForDev(id string) (*CFA, *DeviceTracker, *Device) {
 func vidTestForDev(id string) *DeviceTracker {
 	config := NewConfig("config.json", "default.json", "calculated.json")
 
+	fmt.Println("WWWW NewDeviceTracker 4")
 	tracker := NewDeviceTracker(config, false, []string{})
 
 	devs := tracker.bridge.GetDevs(config)
@@ -280,6 +283,29 @@ func dotLoop(cmd *uc.Cmd, tracker *DeviceTracker) {
 		tracker.shutdown()
 	}()
 
+LOOP:
+	for {
+		select {
+		case <-stop:
+			break LOOP
+		default:
+		}
+		fmt.Printf(". ")
+		time.Sleep(time.Second * 1)
+	}
+
+	runCleanup(cmd)
+}
+func quietLoop(cmd *uc.Cmd, tracker *DeviceTracker) {
+	c := make(chan os.Signal)
+	stop := make(chan bool)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-c
+		stop <- true
+		tracker.shutdown()
+	}()
+
 	exit := 0
 	for {
 		select {
@@ -291,16 +317,16 @@ func dotLoop(cmd *uc.Cmd, tracker *DeviceTracker) {
 		if exit == 1 {
 			break
 		}
-		fmt.Printf(". ")
-		time.Sleep(time.Second * 1)
+		//        fmt.Printf(". ")
+		time.Sleep(time.Second * 10)
 	}
 
 	runCleanup(cmd)
 }
 
-func runWindowSize(cmd *uc.Cmd) {
+func runGetWindowSize(cmd *uc.Cmd) {
 	cfaWrapped(cmd, "", func(cfa *CFA, dev *Device) {
-		wid, heg := cfa.WindowSize()
+		wid, heg := cfa.GetWindowSize()
 		fmt.Printf("Width: %d, Height: %d\n", wid, heg)
 	})
 }
@@ -325,15 +351,29 @@ func cfaWrapped(cmd *uc.Cmd, appName string, doStuff func(cfa *CFA, dev *Device)
 	}
 
 	if id == "" {
+		fmt.Println("WWWW NewDeviceTracker 1")
 		tracker := NewDeviceTracker(config, false, []string{})
 		devs := tracker.bridge.GetDevs(config)
+		if devs == nil || len(devs) == 0 {
+			fmt.Println("No device listed in config.json is currently available.")
+			return
+		}
 		id = devs[0]
 	}
 
 	cfa, _, dev := cfaForDev(id)
+	if cfa == nil || cfa.dev == nil {
+		fmt.Printf("Device with id %s is currently available.", id)
+		return
+	}
 	fmt.Printf("id:[%s]\n", id)
 	devConfig := config.devs[id]
 	fmt.Printf("%+v\n", devConfig)
+
+	//    if dev.tunnelMethod == ""{
+	//        fmt.Printf("Config for device with id %s is currently available, or device not available.",id )
+	//        return
+	//    }
 
 	startChan := make(chan int)
 
@@ -371,7 +411,7 @@ func cfaWrapped(cmd *uc.Cmd, appName string, doStuff func(cfa *CFA, dev *Device)
 	} else {
 		//cfa.create_session( appName )
 	}
-
+	fmt.Println("DOING STUFF")
 	doStuff(cfa, dev)
 
 	stopChan <- true
@@ -382,32 +422,32 @@ func cfaWrapped(cmd *uc.Cmd, appName string, doStuff func(cfa *CFA, dev *Device)
 	runCleanup(cmd)
 }
 
-func runClickEl(cmd *uc.Cmd) {
-	cfaWrapped(cmd, "", func(cfa *CFA, dev *Device) {
-		label := cmd.Get("-label").String()
-		//system := cmd.Get("-system").Bool()
-		btnName := cfa.GetEl("any", label, 5)
-		cfa.ElClick(btnName)
-	})
+/*
+func runClickEl( cmd *uc.Cmd ) {
+    cfaWrapped( cmd, "", func( cfa *CFA, dev *Device ) {
+        label := cmd.Get("-label").String()
+        //system := cmd.Get("-system").Bool()
+        btnName := cfa.GetEl( "any", label, 5 )
+        cfa.ElClick( btnName )
+    } )
 }
-
-func runForceTouchEl(cmd *uc.Cmd) {
-	cfaWrapped(cmd, "", func(cfa *CFA, dev *Device) {
-		label := cmd.Get("-label").String()
-		//system := cmd.Get("-system").Bool()
-		btnName := cfa.GetEl("any", label, 5)
-		cfa.ElForceTouch(btnName, 1)
-	})
+func runForceTouchEl( cmd *uc.Cmd ) {
+    cfaWrapped( cmd, "", func( cfa *CFA, dev *Device ) {
+        label := cmd.Get("-label").String()
+        //system := cmd.Get("-system").Bool()
+        btnName := cfa.GetEl( "any", label, 5 )
+        cfa.ElForceTouch( btnName, 1 )
+    } )
 }
-
-func runLongTouchEl(cmd *uc.Cmd) {
-	cfaWrapped(cmd, "", func(cfa *CFA, dev *Device) {
-		label := cmd.Get("-label").String()
-		//system := cmd.Get("-system").Bool()
-		btnName := cfa.GetEl("any", label, 5)
-		cfa.ElLongTouch(btnName)
-	})
+func runLongTouchEl( cmd *uc.Cmd ) {
+    cfaWrapped( cmd, "", func( cfa *CFA, dev *Device ) {
+        label := cmd.Get("-label").String()
+        //system := cmd.Get("-system").Bool()
+        btnName := cfa.GetEl( "any", label, 5 )
+        cfa.ElLongTouch( btnName )
+    } )
 }
+*/
 
 func runRunApp(cmd *uc.Cmd) {
 	appName := cmd.Get("-name").String()
@@ -423,7 +463,7 @@ func runSource(cmd *uc.Cmd) {
 		pid, _ = strconv.Atoi(pidStr)
 	}
 	cfaWrapped(cmd, "", func(cfa *CFA, dev *Device) {
-		xml := cfa.Source(bi, pid)
+		xml := cfa.Source(bi, pid, false)
 		fmt.Println(xml)
 	})
 }
@@ -491,56 +531,122 @@ func runAlertInfo(cmd *uc.Cmd) {
 	})
 }
 
-func runWifiIp(cmd *uc.Cmd) {
-	cfaWrapped(cmd, "", func(cfa *CFA, dev *Device) {
-		ip := cfa.WifiIp()
-		fmt.Println(ip)
-	})
+func runInteractive(cmd *uc.Cmd) {
+	config := common(cmd)
+
+	// This seems to do nothing... what gives
+	/*if config.cpuProfile {
+	    f, _ := os.Create("cpuprofile")
+	    if err == nil {
+	        pprof.StartCPUProfile( f )
+	        defer pprof.StopCPUProfile()
+	    }
+	}*/
+
+	idNode := cmd.Get("-id")
+	ids := []string{}
+	if idNode != nil {
+		idString := idNode.String()
+		if idString != "" {
+			ids = strings.Split(idString, ",")
+			config.idList = ids
+		}
+	}
+
+	cleanup_procs(config)
+
+	nosanity := cmd.Get("-nosanity").Bool()
+	if !nosanity {
+		sane := sanityChecks(config, cmd)
+		if !sane {
+			fmt.Printf("Sanity checks failed. Exiting\n")
+			return
+		}
+	}
+
+	fmt.Println("WWWW NewDeviceTracker 2")
+	devTracker := NewDeviceTracker(config, true, ids)
+
+	go func() {
+		reader := bufio.NewReader(os.Stdin)
+		//dev.startup()
+		for {
+			//          var cfrequest CFRequest
+			dev := devTracker.getDevice("c7ba9ff8f4b3659d3e95c6beb93b209c74233319")
+			//            dev := devTracker.getDevice("a9686ebb84a0091436333f5d52d4adc4181e9b07")
+			if dev == nil {
+				fmt.Println("Waiting for device to exist")
+				time.Sleep(time.Millisecond * 1000)
+				continue
+			}
+			if dev.cfa == nil {
+				fmt.Println("Waiting for cfa to be initialized")
+				time.Sleep(time.Millisecond * 1000)
+				continue
+			} else if dev.cfa.nngSocket == nil {
+				fmt.Println("Waiting for cfa socket to be initialized")
+				time.Sleep(time.Millisecond * 1000)
+				continue
+			}
+			text, _ := reader.ReadString('\n')
+			text = strings.TrimSpace(text)
+			if text == "" {
+				continue
+			}
+			cfrequest, error := NewExternalCFRequestFromJSON([]byte(text))
+			if error != nil {
+				fmt.Println("Interactive JSON error: %v\n", error)
+			} else {
+				fmt.Println("Sending request")
+				dev.CFRequestChan <- cfrequest
+			}
+		}
+	}()
+
+	coro_sigterm(config, devTracker)
+	quietLoop(cmd, devTracker)
+	//    coroHttpServer( devTracker )
 }
-
-func runSiri(cmd *uc.Cmd) {
-	cmdT := cmd.Get("-cmd").String()
+func runRawJson(cmd *uc.Cmd) {
+	filename := cmd.Get("-file")
+	//    action := cmd.Get("-action").String()
+	//    bundleId := cmd.Get("-bundleId").String()
+	//    text := cmd.Get("-text").String()
+	//    x := cmd.Get("-x").String()
+	//    y := cmd.Get("-y").String()
 	cfaWrapped(cmd, "", func(cfa *CFA, dev *Device) {
-		cfa.Siri(cmdT)
-	})
-}
-
-func runToLauncher(cmd *uc.Cmd) {
-	cfaWrapped(cmd, "", func(cfa *CFA, dev *Device) {
-		cfa.ToLauncher()
-	})
-}
-
-func runElByPid(cmd *uc.Cmd) {
-	pid := cmd.Get("-pid").Int()
-	cfaWrapped(cmd, "", func(cfa *CFA, dev *Device) {
-		source := cfa.ElByPid(pid, true)
-		fmt.Println(source)
-	})
-}
-
-func runPidChildWithWidth(cmd *uc.Cmd) {
-	pid := cmd.Get("-pid").Int()
-	width := cmd.Get("-width").Int()
-
-	cfaWrapped(cmd, "", func(cfa *CFA, dev *Device) {
-		source := cfa.PidChildWithWidth(pid, width)
-		fmt.Println(source)
-	})
-}
-
-func runAppAtPoint(cmd *uc.Cmd) {
-	x := cmd.Get("-x").Int()
-	y := cmd.Get("-y").Int()
-	cfaWrapped(cmd, "", func(cfa *CFA, dev *Device) {
-		app := cfa.AppAtPoint(x, y, true, false, true)
-		fmt.Println(app)
+		var cfrequest *CFRequest
+		if filename != nil && filename.String() != "" {
+			data, error := ioutil.ReadFile(filename.String())
+			if error != nil {
+				fmt.Println("%v", error)
+				return
+			}
+			cfrequest, error = NewExternalCFRequestFromJSON([]byte(data))
+			if error != nil {
+				fmt.Println("%v", error)
+				return
+			}
+		} else {
+			fmt.Println("must specify -file")
+		}
+		cfresponse := cfa.SendCFRequestAndWait(cfrequest)
+		value := string(cfresponse.RawValue)
+		if value == "" {
+		} else if value[0] == '{' {
+			//TODO: properly unescape JSON in a generic way and print...
+			value = strings.Replace(value, "\\n", "\n", -1)
+			value = strings.Replace(value, "\\\"", "\"", -1)
+			fmt.Println("Value: %s", value)
+		} else {
+			fmt.Println("Value: %s", value)
+		}
 	})
 }
 
 func runWifiMac(cmd *uc.Cmd) {
 	cfaWrapped(cmd, "", func(cfa *CFA, dev *Device) {
-		ip := dev.WifiMac()
+		ip := "TODO" //dev.WifiMac()
 		fmt.Println(ip)
 	})
 }
@@ -564,28 +670,19 @@ func runAt(cmd *uc.Cmd) {
 		/*cfa.Siri("activate assistivetouch")
 		  time.Sleep( time.Millisecond * 600 )
 		  cfa.home()*/
-		dev.taskSwitcher()
+		dev.ShowTaskSwitcher()
 	})
 }
 
-func runIsLocked(cmd *uc.Cmd) {
+func runPing(cmd *uc.Cmd) {
 	cfaWrapped(cmd, "", func(cfa *CFA, dev *Device) {
-		locked := cfa.IsLocked()
-		if locked {
-			fmt.Println("Device screen is locked")
-		} else {
-			fmt.Println("Device screen is unlocked")
+		for {
+			start := time.Now()
+			cfa.ping()
+			elapsed := time.Now().Sub(start)
+			fmt.Printf("Elapsed ping time %v\n", elapsed)
+			time.Sleep(time.Second * 1)
 		}
-	})
-}
-
-func runUnlock(cmd *uc.Cmd) {
-	cfaWrapped(cmd, "", func(cfa *CFA, dev *Device) {
-		//cfa.Unlock()
-		cfa.ioHid(0x0c, 0x30) // power
-		//time.Sleep(time.Second)
-		//cfa.ioHid( 0x07, 0x4a ) // home keyboard button
-		cfa.Unlock()
 	})
 }
 
@@ -677,6 +774,7 @@ func runMain(cmd *uc.Cmd) {
 		}
 	}
 
+	fmt.Println("WWWW NewDeviceTracker 2")
 	devTracker := NewDeviceTracker(config, true, ids)
 	coro_sigterm(config, devTracker)
 

@@ -67,6 +67,7 @@ func (self *GIDev) getUdid() string {
 
 func listenForDevices(stopChan chan bool, onConnect func(string, ios.DeviceEntry), onDisconnect func(string)) {
 	go func() {
+		log.Info("goios: New Thread: listening for device connect/disconnect")
 		udidMap := make(map[int]string)
 
 		exit := false
@@ -87,11 +88,12 @@ func listenForDevices(stopChan chan bool, onConnect func(string, ios.DeviceEntry
 				time.Sleep(time.Second * 3)
 				continue
 			}
+		LOOP:
 			for {
 				select {
 				case <-stopChan:
 					exit = true
-					break
+					break LOOP
 				default:
 				}
 				if exit {
@@ -106,11 +108,13 @@ func listenForDevices(stopChan chan bool, onConnect func(string, ios.DeviceEntry
 
 				if msg.MessageType == "Attached" {
 					udid := msg.Properties.SerialNumber
+					log.Info("goios: Detected new device ", udid)
 					udidMap[msg.DeviceID] = udid
 					goIosDevice, _ := ios.GetDevice(udid)
 					onConnect(udid, goIosDevice)
 				} else if msg.MessageType == "Detached" {
 					udid := udidMap[msg.DeviceID]
+					log.Info("goios: Device disconnected ", udid)
 					onDisconnect(udid)
 				}
 			}
@@ -635,9 +639,10 @@ func (self *GIDev) NewSyslogMonitor(handleLogItem func(msg string, app string)) 
 	self.logStopChan = make(chan bool)
 	self.rx = regexp.MustCompile(`\\u[0-9a-fA-F]{4}`)
 	go func() {
+		log.Info("goios: New thread: SyslogMonitor")
 		syslogConnection, err := syslog.New(self.goIosDevice)
 		if err != nil {
-			fmt.Printf("Error monitoring device syslog\n")
+			log.Error("goios: Error monitoring device syslog. Terminating thread.")
 			return
 		}
 		defer syslogConnection.Close()

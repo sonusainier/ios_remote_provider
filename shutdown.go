@@ -117,7 +117,7 @@ func cleanup_procs( config *Config ) {
         "xcodebuild": "/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild",
     }
      
-	  procs := get_procs()
+    procs := get_procs()
     
     var hangingPids []int
     

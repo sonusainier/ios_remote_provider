@@ -148,7 +148,7 @@ func proc_generic( procTracker ProcTracker, wrapper interface{}, opt *ProcOption
                     case line, _ := <- errStream:
                       errText = errText + line
                     default:
-                      break
+                      break 
                   }
                 }
                 
@@ -203,11 +203,11 @@ func proc_generic( procTracker ProcTracker, wrapper interface{}, opt *ProcOption
         outStream := cmd.Stdout
         errStream := cmd.Stderr
         
-        runDone := false
+        LOOP:
         for {
             select {
                 case <- statCh:
-                    runDone = true
+                    break LOOP
                 case msg := <- controlCh:
                     fmt.Printf("Got stop cmd pid=%d\n",proc.pid)
                     if msg.msgType == 1 { // stop
@@ -222,7 +222,7 @@ func proc_generic( procTracker ProcTracker, wrapper interface{}, opt *ProcOption
                         death_to_proc( proc.pid )
                         procTracker.stopProc( proc.name )
                     }
-                    runDone = true
+                    break LOOP
                 case line, _ := <- outStream:
                     if line == "" { continue }
                     if opt.stdoutHandler != nil {
@@ -239,7 +239,6 @@ func proc_generic( procTracker ProcTracker, wrapper interface{}, opt *ProcOption
                         }
                     }
             }
-            if runDone { break }
         }
         
         proc.cmd = nil
